@@ -1,0 +1,30 @@
+Escribí un párrafo de introducción sobre el concepto de fine-tuning en NLP
+Redactá una sección sobre las limitaciones de los modelos de lenguaje grandes
+Escribí un párrafo sobre la importancia de la evaluación en proyectos de ML
+Redactá una hipótesis de investigación sobre adaptación de estilo textual
+Escribí una revisión bibliográfica sobre técnicas de transfer learning
+Redactá un párrafo sobre ética en el uso de datos personales para IA
+Escribí una sección de metodología para un experimento de clasificación de texto
+Redactá un análisis comparativo entre modelos de 2B y 7B parámetros
+Escribí un párrafo sobre la arquitectura transformer aplicada a generación de texto
+Redactá una conclusión sobre los resultados de un experimento de perplejidad
+Escribí una introducción sobre el problema de adaptación de dominio en NLP
+Redactá un párrafo sobre las ventajas de LoRA frente al fine-tuning completo
+Escribí una sección de trabajos relacionados sobre personalización de LLMs
+Redactá un análisis sobre el trade-off entre tamaño de modelo y calidad
+Escribí un párrafo sobre la evaluación de la coherencia en generación de texto
+Redactá una discusión sobre los desafíos del fine-tuning con pocos datos
+Escribí una introducción sobre procesamiento de lenguaje natural en español
+Redactá un párrafo sobre la importancia del chat template en fine-tuning
+Escribí un análisis sobre métricas automáticas de evaluación de estilo
+Redactá una sección sobre data augmentation para datasets pequeños
+Escribí un párrafo sobre el problema del catastrophic forgetting en fine-tuning
+Redactá una discusión sobre los sesgos en modelos entrenados con datos personales
+Escribí una introducción al concepto de perplexidad como métrica de evaluación
+Redactá un párrafo sobre el impacto de la longitud del contexto en la generación
+Escribí una sección sobre la reproducibilidad en experimentos de NLP
+Redactá un análisis sobre las diferencias entre registros lingüísticos en español rioplatense
+Escribí un párrafo sobre cuantización de modelos para inferencia en hardware limitado
+Redactá una conclusión sobre la viabilidad del fine-tuning en hardware de consumo
+Escribí un párrafo sobre el rol del tokenizador en la calidad del fine-tuning
+Redactá una introducción al concepto de estilo autorial en lingüística computacional

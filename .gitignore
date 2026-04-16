@@ -1,0 +1,66 @@
+# ── Documentos internos del equipo ──────────────────────────────────────────
+MEMORIA_PLAN.md
+
+# ── Datos personales / sensibles ────────────────────────────────────────────
+# NUNCA subir chats, emails ni documentos originales
+data/raw/
+data/processed/
+data/dataset/
+
+# Exports de WhatsApp por si quedan fuera de data/raw/
+WhatsApp*/
+_chat.txt
+
+# Archivos de email
+*.mbox
+*.eml
+
+# ── Modelos y pesos ──────────────────────────────────────────────────────────
+models/
+memoria-lora/
+memoria-merged/
+*.gguf
+*.safetensors
+*.bin
+*.pt
+*.pth
+
+# Clasificador entrenado (generado por eval/train_classifier.py)
+authorship-classifier/
+
+# ── Variables de entorno ─────────────────────────────────────────────────────
+.env
+# .env.example sí se sube (sin valores reales)
+
+# ── Bases de datos y vectorstores ────────────────────────────────────────────
+chroma_db/
+*.db
+*.sqlite
+
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Entornos virtuales ───────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+
+# ── Jupyter ──────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+
+# ── macOS ────────────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+wandb/
+runs/
+mlruns/

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MemoRIA — Asistente de escritura personal</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+
+  <header>
+    <h1>Memo<span>RIA</span></h1>
+    <p>Asistente de escritura personal · Fine-tuned con Gemma 4 E2B</p>
+  </header>
+
+  <main>
+    <!-- Registro -->
+    <div class="card">
+      <div class="register-group" role="group" aria-label="Registro lingüístico">
+        <button class="register-btn active" data-register="casual">
+          💬 Casual
+        </button>
+        <button class="register-btn" data-register="professional">
+          📧 Email profesional
+        </button>
+        <button class="register-btn" data-register="academic">
+          📝 Académico
+        </button>
+      </div>
+
+      <textarea
+        id="prompt"
+        placeholder="Escribí tu prompt acá... (Cmd+Enter para generar)"
+        rows="3"
+        aria-label="Prompt"
+      ></textarea>
+
+      <div class="slider-row">
+        <span>Tokens máx.</span>
+        <input type="range" id="max-tokens" min="50" max="1000" value="500" step="50" />
+        <span id="slider-val">500</span>
+        &nbsp;·&nbsp;
+        <span id="token-count">0 / 500</span>
+      </div>
+
+      <div class="actions">
+        <button class="btn btn-primary" id="btn-generate">Generar</button>
+        <button class="btn btn-ghost"   id="btn-regenerate">Regenerar</button>
+        <button class="btn btn-ghost"   id="btn-stop" style="display:none">Detener</button>
+      </div>
+    </div>
+
+    <!-- Output -->
+    <div class="card">
+      <div class="output-header">Respuesta</div>
+      <div id="output" aria-live="polite"></div>
+      <div id="status-bar"></div>
+      <div class="actions" style="margin-top:0.75rem">
+        <button class="btn btn-ghost" id="btn-copy">Copiar</button>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    MemoRIA · UdeSA MIA NLP 2026 · Nico Karagozian, Clara Kearney, Valen Pivotto
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
