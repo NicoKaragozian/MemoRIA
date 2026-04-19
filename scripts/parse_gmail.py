@@ -117,8 +117,8 @@ def parse_mbox(filepath: str, sender_email: str, min_len: int = 100) -> list[dic
             continue
 
         # Si el .mbox trae etiquetas de Gmail, preferir carpeta Sent
-        labels = msg.get("X-Gmail-Labels", "")
-        if labels and "Sent" not in labels:
+        labels = _decode_str(msg.get("X-Gmail-Labels", ""))
+        if labels and "Sent" not in labels and "Enviado" not in labels:
             continue
 
         subject = _decode_str(msg.get("Subject", ""))

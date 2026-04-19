@@ -18,7 +18,7 @@ TAG_MAP = {
 
 
 def load_model(model_id: str = MODEL_ID, adapter_path: str = ADAPTER_PATH):
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    tokenizer = AutoTokenizer.from_pretrained(model_id, extra_special_tokens={})
     tokenizer.padding_side = "left"
 
     device = "mps" if torch.backends.mps.is_available() else "cpu"

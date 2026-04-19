@@ -129,7 +129,7 @@ def eval_perplexity(
     print(f"Evaluando perplexidad sobre {len(texts)} textos del test set")
 
     device = "mps" if torch.backends.mps.is_available() else "cpu"
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    tokenizer = AutoTokenizer.from_pretrained(model_id, extra_special_tokens={})
 
     print("\n[1/2] Modelo BASE...")
     base_model = AutoModelForCausalLM.from_pretrained(

@@ -10,6 +10,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 from collections import Counter
+from typing import Optional
 
 from transformers import AutoTokenizer
 
@@ -24,7 +25,10 @@ _tokenizer = None
 def _get_tokenizer():
     global _tokenizer
     if _tokenizer is None:
-        _tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+        # Workaround bug transformers 4.57.6: tokenizer_config.json de Gemma 4 trae
+        # extra_special_tokens como list ['<|video|>'] pero _set_model_specific_special_tokens
+        # espera dict. Pasar {} sobrescribe el config. <|video|> es solo para multimodal.
+        _tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, extra_special_tokens={})
     return _tokenizer
 
 
@@ -52,7 +56,7 @@ def _item_hash(text: str) -> str:
     return hashlib.sha1(normalized.encode()).hexdigest()
 
 
-def format_example(item: dict, tokenizer, rng) -> dict | None:
+def format_example(item: dict, tokenizer, rng) -> Optional[dict]:
     """
     Convierte un item raw al formato de chat de Gemma 4.
     El prompt se muestrea del catálogo — NO contiene palabras del target.

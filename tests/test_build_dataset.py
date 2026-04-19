@@ -48,37 +48,31 @@ def _make_items(register: str, n: int, prefix: str = "") -> list[dict]:
 
 # ── Tests ────────────────────────────────────────────────────────────────────
 
-def test_no_leakage(tmp_path, prompts_dir):
+def test_no_leakage(tmp_path, prompts_dir, monkeypatch):
     """Ningún prompt del catálogo debe contener las palabras del texto target."""
+    import scripts.build_dataset as bd
     from scripts.build_dataset import format_example
+
+    # Limpiar cache de prompts para que _load_prompts use el tmp_path
+    bd._prompts_cache.clear()
+    monkeypatch.chdir(tmp_path)
 
     rng = random.Random(42)
     mock_tokenizer = MagicMock()
-    mock_tokenizer.apply_chat_template.return_value = [1, 2, 3]
-    mock_tokenizer.eos_token = "</s>"
-    mock_tokenizer.decode.return_value = "texto formateado"
+    mock_tokenizer.apply_chat_template.return_value = "<bos>hola<eos>"
+    mock_tokenizer.eos_token = "<eos>"
+    mock_tokenizer.encode.return_value = [1, 2, 3]
 
     item = {"text": "Texto de ejemplo único para el test de leakage.", "register": "casual"}
 
-    # Patchear Path para apuntar a nuestro tmp prompts_dir
     prompt_path = prompts_dir / "casual.txt"
     prompts = [l.strip() for l in prompt_path.read_text().splitlines() if l.strip()]
 
-    with patch("scripts.build_dataset.Path") as mock_path_cls:
-        mock_path = MagicMock()
-        mock_path.exists.return_value = True
-        mock_path.read_text.return_value = prompt_path.read_text()
-        mock_path_cls.return_value.__truediv__ = lambda self, other: mock_path
-        mock_path_cls.side_effect = lambda *a, **kw: mock_path
-
-        result = format_example(item, mock_tokenizer, rng)
+    result = format_example(item, mock_tokenizer, rng)
 
     # El prompt usado no debe contener palabras clave del target
-    target_words = set(item["text"].lower().split())
     for prompt in prompts:
         prompt_words = set(prompt.lower().split())
-        # Overlap mínimo esperado — palabras funcionales compartidas son OK
-        # Lo que NO debe pasar es que el prompt contenga frases del target
         assert not prompt_words.issuperset({"texto", "ejemplo", "único", "leakage"}), \
             f"Prompt '{prompt}' contiene palabras del target"
 

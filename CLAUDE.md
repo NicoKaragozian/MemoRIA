@@ -83,7 +83,7 @@ TP/
 
 ```bash
 # 1. Crear y activar entorno virtual
-python -m venv venv && source venv/bin/activate
+python3 -m venv venv && source venv/bin/activate
 
 # 2. Instalar dependencias (Mac)
 pip install mlx-lm>=0.22.0 transformers>=4.50.0 peft>=0.14.0 trl>=0.12.0 \
