@@ -17,13 +17,13 @@
     <!-- Registro -->
     <div class="card">
       <div class="register-group" role="group" aria-label="Registro lingüístico">
-        <button class="register-btn active" data-register="casual">
+        <button class="register-btn active" data-register="casual" aria-pressed="true">
           💬 Casual
         </button>
-        <button class="register-btn" data-register="professional">
+        <button class="register-btn" data-register="professional" aria-pressed="false">
           📧 Email profesional
         </button>
-        <button class="register-btn" data-register="academic">
+        <button class="register-btn" data-register="academic" aria-pressed="false">
           📝 Académico
         </button>
       </div>
@@ -54,7 +54,7 @@
     <div class="card">
       <div class="output-header">Respuesta</div>
       <div id="output" aria-live="polite"></div>
-      <div id="status-bar"></div>
+      <div id="status-bar" role="status" aria-live="polite"></div>
       <div class="actions" style="margin-top:0.75rem">
         <button class="btn btn-ghost" id="btn-copy">Copiar</button>
       </div>

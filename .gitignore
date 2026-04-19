@@ -64,3 +64,15 @@ env/
 wandb/
 runs/
 mlruns/
+
+# ── Evaluación (contienen textos reales) ─────────────────────────────────────
+eval/*.json
+eval/results/
+eval/cache/
+
+# ── Variables de entorno locales ─────────────────────────────────────────────
+.env.local
+.env.*.local
+
+# ── Dataset manifest ─────────────────────────────────────────────────────────
+data/dataset/manifest.json

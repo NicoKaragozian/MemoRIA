@@ -1,8 +1,7 @@
 'use strict';
 
-const API_BASE     = '';
-let   currentCtrl  = null;
-let   tokenCount   = 0;
+const API_BASE    = '';
+let   currentCtrl = null;
 
 const $ = id => document.getElementById(id);
 
@@ -12,8 +11,12 @@ let   activeRegister = 'casual';
 
 registerBtns.forEach(btn => {
   btn.addEventListener('click', () => {
-    registerBtns.forEach(b => b.classList.remove('active'));
+    registerBtns.forEach(b => {
+      b.classList.remove('active');
+      b.setAttribute('aria-pressed', 'false');
+    });
     btn.classList.add('active');
+    btn.setAttribute('aria-pressed', 'true');
     activeRegister = btn.dataset.register;
   });
 });
@@ -41,7 +44,6 @@ function clearOutput() {
   const out = $('output');
   out.textContent = '';
   out.classList.remove('empty');
-  tokenCount = 0;
   $('token-count').textContent = `0 / ${slider.value}`;
 }
 
@@ -52,20 +54,21 @@ function appendToken(token) {
     out.classList.remove('empty');
   }
   out.textContent += token;
-  tokenCount++;
-  $('token-count').textContent = `${tokenCount} / ${slider.value}`;
-  // Auto-scroll
   out.scrollTop = out.scrollHeight;
 }
 
+function updateStats(evalCount, tps) {
+  $('token-count').textContent = `${evalCount} tokens · ${tps} tok/s`;
+}
+
 function setLoading(loading) {
-  $('btn-generate').disabled    = loading;
-  $('btn-regenerate').disabled  = loading;
-  $('btn-stop').style.display   = loading ? 'inline-block' : 'none';
+  $('btn-generate').disabled   = loading;
+  $('btn-regenerate').disabled = loading;
+  $('btn-stop').style.display  = loading ? 'inline-block' : 'none';
 }
 
 // ── Generar ──────────────────────────────────────────────────────────────────
-async function generate(prompt) {
+async function generate(prompt, seed = null) {
   if (!prompt.trim()) {
     setStatus('Escribí un prompt antes de generar.', 'error');
     return;
@@ -78,18 +81,19 @@ async function generate(prompt) {
   setLoading(true);
   setStatus('Conectando...', '');
 
-  const body = JSON.stringify({
+  const body = {
     prompt,
     register:   activeRegister,
     stream:     true,
     max_tokens: parseInt(slider.value, 10),
-  });
+  };
+  if (seed !== null) body.seed = seed;
 
   try {
     const res = await fetch(`${API_BASE}/generate`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body,
+      body:    JSON.stringify(body),
       signal:  currentCtrl.signal,
     });
 
@@ -102,29 +106,43 @@ async function generate(prompt) {
     const reader  = res.body.getReader();
     const decoder = new TextDecoder();
     let   buffer  = '';
+    let   done    = false;
 
     while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+      const { done: streamDone, value } = await reader.read();
+      if (streamDone || done) break;
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
-      buffer = lines.pop();                        // línea incompleta
+      buffer = lines.pop();
 
       for (const line of lines) {
         if (!line.startsWith('data: ')) continue;
         const payload = line.slice(6).trim();
-        if (payload === '[DONE]') break;
+        if (payload === '[DONE]') { done = true; break; }
 
         try {
           const data = JSON.parse(payload);
-          if (data.error) { setStatus(`Error: ${data.error}`, 'error'); return; }
+          if (data.error) {
+            setStatus(`Error: ${data.error}`, 'error');
+            done = true;
+            break;
+          }
           if (data.token) appendToken(data.token);
+          if (data.done) {
+            updateStats(data.eval_count || 0, data.tokens_per_sec || 0);
+            done = true;
+            break;
+          }
         } catch { /* ignorar JSON mal formado */ }
       }
     }
 
-    setStatus('✓ Listo', 'ok');
+    if (!done || $('output').classList.contains('empty')) {
+      setStatus('✓ Listo', 'ok');
+    } else {
+      setStatus('✓ Listo', 'ok');
+    }
   } catch (err) {
     if (err.name === 'AbortError') {
       setStatus('Generación cancelada.', '');
@@ -144,7 +162,7 @@ $('btn-generate').addEventListener('click', () => {
 
 $('btn-regenerate').addEventListener('click', () => {
   const prompt = $('prompt').value;
-  if (prompt.trim()) generate(prompt);
+  if (prompt.trim()) generate(prompt, Math.floor(Math.random() * 2147483647));
 });
 
 $('btn-stop').addEventListener('click', () => {
@@ -159,7 +177,6 @@ $('btn-copy').addEventListener('click', async () => {
   setTimeout(() => setStatus('', ''), 2000);
 });
 
-// Enter en textarea (Ctrl+Enter o Cmd+Enter para generar)
 $('prompt').addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
     e.preventDefault();
@@ -171,13 +188,14 @@ $('prompt').addEventListener('keydown', e => {
 setOutputPlaceholder();
 sliderVal.textContent = slider.value;
 
-// Health check al cargar
 fetch(`${API_BASE}/health`)
   .then(r => r.json())
   .then(data => {
     if (data.status === 'ok') {
       const model = data.models.find(m => m.includes('memoria')) || data.models[0];
       setStatus(`Modelo: ${model || 'memoria'} ✓`, 'ok');
+    } else if (data.status === 'degraded') {
+      setStatus('⚠ Modelo no cargado — corré create_ollama_model.sh primero', 'error');
     } else {
       setStatus('⚠ Ollama no disponible — asegurate de que el modelo esté cargado', 'error');
     }

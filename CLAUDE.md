@@ -120,9 +120,9 @@ docker compose up
 
 `bitsandbytes` requiere CUDA — no corre en Mac. MLX-LM usa la memoria unificada de Apple Silicon directamente, sin copias CPU↔GPU. Con Gemma 4 E2B (5.1B params), 4-bit cuantización baja los pesos de ~10.2 GB a ~2.8 GB, lo que permite training holgado en 16 GB.
 
-### Por qué el topic usa solo 4 palabras
+### Por qué los prompts de train se muestrean de catálogos independientes
 
-Versiones anteriores usaban las primeras 10 palabras del texto como "topic" del prompt de entrenamiento. Esto convierte la tarea en continuación de texto, no en aprendizaje de estilo. Con 4 palabras el leakage es mínimo.
+Versiones anteriores usaban las primeras 4 palabras del texto target como "topic" del prompt. Eso sigue introduciendo leakage (el modelo ve el inicio del target y puede aprender a continuar en vez de aprender estilo), y tampoco garantiza diversidad de instrucciones. La versión actual muestrea el prompt completo del catálogo `data/prompts/{register}.txt` para cada ejemplo de train. Los catálogos contienen prompts de dominios ajenos al TP (historia, biología, economía, etc.) para que E3/E4 midan estilo autorial real y no memorización del contenido del TP.
 
 ### Por qué se usa `tokenizer.apply_chat_template` en vez de string hardcodeado
 

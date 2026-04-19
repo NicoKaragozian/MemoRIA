@@ -2,7 +2,7 @@
 # Fine-tuning con MLX-LM en Mac Apple Silicon (path principal para M5 16 GB)
 # Uso: bash scripts/finetune_mlx.sh [iters]
 
-set -e
+set -euo pipefail
 
 ITERS=${1:-1000}
 MLX_MODEL="./models/gemma4-e2b-4bit"

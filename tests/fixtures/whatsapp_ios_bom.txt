@@ -1,0 +1,3 @@
+\ufeff1/3/24, 10:30\u202fa.\u202fm. - Nico: Este mensaje tiene BOM al inicio y narrow NBSP en la hora, como los exports reales de iOS.
+1/3/24, 10:31\u202fa.\u202fm. - Bot: Mensaje del sistema añadió a alguien al grupo
+1/3/24, 10:32\u202fa.\u202fm. - Nico: Segundo mensaje real del autor con suficientes caracteres para superar el mínimo.

@@ -1,30 +1,30 @@
-Escribí un párrafo de introducción sobre el concepto de fine-tuning en NLP
-Redactá una sección sobre las limitaciones de los modelos de lenguaje grandes
-Escribí un párrafo sobre la importancia de la evaluación en proyectos de ML
-Redactá una hipótesis de investigación sobre adaptación de estilo textual
-Escribí una revisión bibliográfica sobre técnicas de transfer learning
-Redactá un párrafo sobre ética en el uso de datos personales para IA
-Escribí una sección de metodología para un experimento de clasificación de texto
-Redactá un análisis comparativo entre modelos de 2B y 7B parámetros
-Escribí un párrafo sobre la arquitectura transformer aplicada a generación de texto
-Redactá una conclusión sobre los resultados de un experimento de perplejidad
-Escribí una introducción sobre el problema de adaptación de dominio en NLP
-Redactá un párrafo sobre las ventajas de LoRA frente al fine-tuning completo
-Escribí una sección de trabajos relacionados sobre personalización de LLMs
-Redactá un análisis sobre el trade-off entre tamaño de modelo y calidad
-Escribí un párrafo sobre la evaluación de la coherencia en generación de texto
-Redactá una discusión sobre los desafíos del fine-tuning con pocos datos
-Escribí una introducción sobre procesamiento de lenguaje natural en español
-Redactá un párrafo sobre la importancia del chat template en fine-tuning
-Escribí un análisis sobre métricas automáticas de evaluación de estilo
-Redactá una sección sobre data augmentation para datasets pequeños
-Escribí un párrafo sobre el problema del catastrophic forgetting en fine-tuning
-Redactá una discusión sobre los sesgos en modelos entrenados con datos personales
-Escribí una introducción al concepto de perplexidad como métrica de evaluación
-Redactá un párrafo sobre el impacto de la longitud del contexto en la generación
-Escribí una sección sobre la reproducibilidad en experimentos de NLP
-Redactá un análisis sobre las diferencias entre registros lingüísticos en español rioplatense
-Escribí un párrafo sobre cuantización de modelos para inferencia en hardware limitado
-Redactá una conclusión sobre la viabilidad del fine-tuning en hardware de consumo
-Escribí un párrafo sobre el rol del tokenizador en la calidad del fine-tuning
-Redactá una introducción al concepto de estilo autorial en lingüística computacional
+Escribí un párrafo de introducción sobre las causas de la Primera Guerra Mundial
+Redactá una sección metodológica para un experimento sobre fotosíntesis en plantas C4
+Escribí un análisis comparativo entre el empirismo y el racionalismo en epistemología
+Redactá una revisión bibliográfica sobre los determinantes del crecimiento económico
+Escribí un párrafo sobre la influencia del barroco en la arquitectura colonial latinoamericana
+Redactá una hipótesis sobre la relación entre biodiversidad y estabilidad ecosistémica
+Escribí una introducción al problema del libre albedrío en filosofía contemporánea
+Redactá un análisis sobre las consecuencias sociales de la industrialización del siglo XIX
+Escribí un párrafo sobre la evolución del concepto de ciudadanía desde la Revolución Francesa
+Redactá una sección de resultados sobre un estudio de migración de aves en el cono sur
+Escribí una discusión sobre las implicancias éticas de la edición genómica en humanos
+Redactá un párrafo sobre los fundamentos de la teoría keynesiana en economía
+Escribí una introducción sobre el rol de la microbiota intestinal en la salud humana
+Redactá una sección sobre los principios del diseño urbano sostenible
+Escribí un análisis sobre la estructura armónica en la música de Piazzolla
+Redactá un párrafo sobre la crisis del sistema feudal en la Europa medieval
+Escribí una revisión sobre los enfoques teóricos en sociología del trabajo
+Redactá una hipótesis sobre el impacto del cambio climático en la distribución de glaciares patagónicos
+Escribí un párrafo sobre la ontología en Heidegger y el concepto de Dasein
+Redactá un análisis de la política exterior argentina durante el siglo XX
+Escribí una introducción sobre los mecanismos de resistencia antimicrobiana
+Redactá una sección metodológica para un estudio sobre cohesión social en barrios populares
+Escribí un párrafo sobre la función del Banco Central en la política monetaria
+Redactá una discusión sobre los límites de la democracia representativa en Latinoamérica
+Escribí un análisis comparativo entre la tragedia griega y el teatro del Siglo de Oro español
+Redactá un párrafo sobre las propiedades físicas de los materiales compuestos en ingeniería civil
+Escribí una introducción sobre la teoría del apego en psicología del desarrollo
+Redactá una sección de conclusiones sobre un experimento de fermentación láctica
+Escribí un análisis sobre el concepto de hegemonía en Gramsci aplicado a América Latina
+Redactá un párrafo sobre las transformaciones del mercado laboral en la era digital

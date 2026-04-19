@@ -2,7 +2,8 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir fastapi>=0.110.0 httpx>=0.27.0 uvicorn>=0.29.0
+COPY requirements-backend.txt .
+RUN pip install --no-cache-dir -r requirements-backend.txt
 
 COPY . .
 

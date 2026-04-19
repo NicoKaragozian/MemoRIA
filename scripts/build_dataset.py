@@ -1,34 +1,23 @@
 """
 Combina los tres registros, formatea con el chat template real de Gemma 4,
-balancea y divide en train/val/test (80/10/10).
+balancea y divide en train/val/test (80/10/10) con split estratificado.
+Los prompts se muestrean del catálogo data/prompts/ (sin palabras del target).
 """
+import hashlib
 import json
-import random
+import logging
+import re
+from datetime import datetime
 from pathlib import Path
 from collections import Counter
+
 from transformers import AutoTokenizer
 
+logger = logging.getLogger(__name__)
+
 MODEL_ID = "google/gemma-4-E2B-it"
+MAX_TOKEN_LEN = 2048
 
-INSTRUCTIONS_BY_REGISTER = {
-    "casual": [
-        "[CASUAL] Escribí un mensaje de WhatsApp: {topic}",
-        "[CASUAL] Respondé de manera informal: {topic}",
-        "[CASUAL] Mensaje casual de Nico: {topic}",
-    ],
-    "email_prof": [
-        "[EMAIL-PROF] Redactá un email profesional sobre: {topic}",
-        "[EMAIL-PROF] Escribí un correo formal: {topic}",
-        "[EMAIL-PROF] Email profesional de Nico sobre: {topic}",
-    ],
-    "academic": [
-        "[ACADÉMICO] Escribí un párrafo académico sobre: {topic}",
-        "[ACADÉMICO] Redactá en estilo académico: {topic}",
-        "[ACADÉMICO] Fragmento de paper o ensayo: {topic}",
-    ],
-}
-
-# Cargado una vez — lazy
 _tokenizer = None
 
 
@@ -40,39 +29,57 @@ def _get_tokenizer():
 
 
 def _load_prompts(register: str) -> list[str]:
-    """Carga los prompts independientes del catálogo para este registro."""
-    path = Path("data/prompts") / f"{register}.txt"
+    """Carga los prompts del catálogo independiente para este registro."""
+    fname = "email_prof" if register == "email_prof" else register
+    path = Path("data/prompts") / f"{fname}.txt"
     if not path.exists():
-        return []
+        logger.warning("Catálogo de prompts no encontrado: %s", path)
+        return [f"[{register.upper()}] Escribí un texto en este registro."]
     return [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-def _extract_topic(text: str) -> str:
-    """
-    Usa las primeras 3-4 palabras como topic para reducir leakage.
-    El model aprende estilo, no continuación literal.
-    """
-    words = text.split()[:4]
-    return " ".join(words) + "..."
+_prompts_cache: dict[str, list[str]] = {}
 
 
-def format_example(item: dict, tokenizer) -> dict:
+def _get_prompts(register: str) -> list[str]:
+    if register not in _prompts_cache:
+        _prompts_cache[register] = _load_prompts(register)
+    return _prompts_cache[register]
+
+
+def _item_hash(text: str) -> str:
+    normalized = re.sub(r'\s+', ' ', text.lower().strip())
+    return hashlib.sha1(normalized.encode()).hexdigest()
+
+
+def format_example(item: dict, tokenizer, rng) -> dict | None:
     """
-    Convierte un item raw al formato de chat de Gemma 4 usando apply_chat_template.
-    Esto garantiza que el template en train sea byte-idéntico al de inferencia.
+    Convierte un item raw al formato de chat de Gemma 4.
+    El prompt se muestrea del catálogo — NO contiene palabras del target.
     """
     register = item["register"]
     text = item["text"]
-    topic = _extract_topic(text)
 
-    templates = INSTRUCTIONS_BY_REGISTER.get(register, [])
-    instruction = random.choice(templates).format(topic=topic)
+    instruction = rng.choice(_get_prompts(register))
 
     chat = [
         {"role": "user", "content": instruction},
         {"role": "assistant", "content": text},
     ]
-    formatted = tokenizer.apply_chat_template(chat, tokenize=False)
+    formatted = tokenizer.apply_chat_template(
+        chat,
+        tokenize=False,
+        add_generation_prompt=False,
+    )
+    if tokenizer.eos_token and not formatted.endswith(tokenizer.eos_token):
+        formatted = formatted + tokenizer.eos_token
+
+    token_len = len(tokenizer.encode(formatted))
+    if token_len > MAX_TOKEN_LEN:
+        logger.debug(
+            "Ejemplo descartado: %d tokens > %d (register=%s)", token_len, MAX_TOKEN_LEN, register
+        )
+        return None
 
     return {
         "text": formatted,
@@ -97,6 +104,25 @@ def _save_jsonl(data: list[dict], path: Path):
             f.write(json.dumps(item, ensure_ascii=False) + "\n")
 
 
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _dedup(items: list[dict]) -> list[dict]:
+    seen: set[str] = set()
+    result = []
+    for it in items:
+        h = _item_hash(it.get("text", ""))
+        if h not in seen:
+            seen.add(h)
+            result.append(it)
+    return result
+
+
 def build_dataset(
     casual_file: str,
     email_file: str,
@@ -107,36 +133,59 @@ def build_dataset(
     max_per_register: int = 1000,
     seed: int = 42,
 ):
-    random.seed(seed)
+    from scripts.seed import set_all_seeds
+    import random
+    set_all_seeds(seed)
+    rng = random.Random(seed)
 
     casual   = _load_jsonl(casual_file)
     email    = _load_jsonl(email_file)
     academic = _load_jsonl(academic_file)
+    logger.info("Raw — casual: %d, email: %d, academic: %d", len(casual), len(email), len(academic))
 
-    print(f"Raw — casual: {len(casual)}, email: {len(email)}, academic: {len(academic)}")
+    casual   = _dedup(casual)
+    email    = _dedup(email)
+    academic = _dedup(academic)
+    logger.info("Post-dedup — casual: %d, email: %d, academic: %d", len(casual), len(email), len(academic))
 
-    random.shuffle(casual);   casual   = casual[:max_per_register]
-    random.shuffle(email);    email    = email[:max_per_register]
-    random.shuffle(academic); academic = academic[:max_per_register]
+    rng.shuffle(casual);   casual   = casual[:max_per_register]
+    rng.shuffle(email);    email    = email[:max_per_register]
+    rng.shuffle(academic); academic = academic[:max_per_register]
 
     tokenizer = _get_tokenizer()
 
     all_examples = []
+    skipped_long = 0
     for item in casual + email + academic:
         try:
-            all_examples.append(format_example(item, tokenizer))
+            ex = format_example(item, tokenizer, rng)
+            if ex is None:
+                skipped_long += 1
+            else:
+                all_examples.append(ex)
         except Exception as e:
-            print(f"  ⚠ Error formateando item: {e}")
+            logger.warning("Error formateando item: %s", e)
 
-    random.shuffle(all_examples)
+    if skipped_long:
+        logger.info("Descartados %d ejemplos por superar %d tokens", skipped_long, MAX_TOKEN_LEN)
 
-    n = len(all_examples)
-    n_val  = int(n * val_split)
-    n_test = int(n * test_split)
+    from sklearn.model_selection import train_test_split
 
-    test_set  = all_examples[:n_test]
-    val_set   = all_examples[n_test:n_test + n_val]
-    train_set = all_examples[n_test + n_val:]
+    idx    = list(range(len(all_examples)))
+    strata = [ex["register"] for ex in all_examples]
+
+    idx_trainval, idx_test = train_test_split(
+        idx, test_size=test_split, stratify=strata, random_state=seed,
+    )
+    strata_tv = [strata[i] for i in idx_trainval]
+    effective_val = val_split / (1 - test_split)
+    idx_train, idx_val = train_test_split(
+        idx_trainval, test_size=effective_val, stratify=strata_tv, random_state=seed,
+    )
+
+    train_set = [all_examples[i] for i in idx_train]
+    val_set   = [all_examples[i] for i in idx_val]
+    test_set  = [all_examples[i] for i in idx_test]
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -145,6 +194,36 @@ def build_dataset(
     _save_jsonl(val_set,   output_path / "val.jsonl")
     _save_jsonl(val_set,   output_path / "valid.jsonl")   # mlx-lm usa valid.jsonl
     _save_jsonl(test_set,  output_path / "test.jsonl")
+
+    # Manifest de reproducibilidad
+    import sklearn
+    import transformers as _tf
+    manifest = {
+        "created_at": datetime.utcnow().isoformat() + "Z",
+        "seed": seed,
+        "max_per_register": max_per_register,
+        "max_token_len": MAX_TOKEN_LEN,
+        "sklearn_version": sklearn.__version__,
+        "transformers_version": _tf.__version__,
+        "counts": {
+            "train": len(train_set),
+            "val": len(val_set),
+            "test": len(test_set),
+        },
+        "train_by_register": dict(Counter(ex["register"] for ex in train_set)),
+        "test_by_register":  dict(Counter(ex["register"] for ex in test_set)),
+        "sha256": {
+            "train": _sha256_file(output_path / "train.jsonl"),
+            "val":   _sha256_file(output_path / "val.jsonl"),
+            "test":  _sha256_file(output_path / "test.jsonl"),
+        },
+        "prompts_sha1": {
+            reg: hashlib.sha1("\n".join(_get_prompts(reg)).encode()).hexdigest()
+            for reg in ("casual", "email_prof", "academic")
+        },
+    }
+    with open(output_path / "manifest.json", "w") as mf:
+        json.dump(manifest, mf, indent=2, ensure_ascii=False)
 
     reg_counts = Counter(ex["register"] for ex in train_set)
     print(f"\n✓ Dataset final:")
@@ -155,6 +234,7 @@ def build_dataset(
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     build_dataset(
         casual_file="data/processed/casual.jsonl",
         email_file="data/processed/email_prof.jsonl",

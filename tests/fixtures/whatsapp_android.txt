@@ -1,0 +1,6 @@
+1/3/24, 10:30 - NICO: Este es un mensaje de Android con espacios normales, sin BOM al inicio del archivo.
+1/3/24, 10:31 - Ana: Ok, entendido perfectamente.
+1/3/24, 10:32 - NICO: Y este es otro mensaje suficientemente largo del autor con capitalización diferente.
+1/3/24, 10:33 - NICO: Este mensaje continúa
+en múltiples líneas porque así lo escribió
+el usuario en la aplicación.
