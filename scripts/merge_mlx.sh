@@ -4,7 +4,7 @@
 
 set -e
 
-MLX_MODEL="./models/gemma4-e2b-4bit"
+MLX_MODEL="./models/gemma3-4b-4bit"
 ADAPTER="./memoria-lora"
 MERGED="./memoria-merged"
 

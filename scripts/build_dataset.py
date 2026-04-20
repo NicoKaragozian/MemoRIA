@@ -16,7 +16,7 @@ from transformers import AutoTokenizer
 
 logger = logging.getLogger(__name__)
 
-MODEL_ID = "google/gemma-4-E2B-it"
+MODEL_ID = "google/gemma-3-4b-it"
 MAX_TOKEN_LEN = 2048
 
 _tokenizer = None

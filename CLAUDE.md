@@ -1,6 +1,6 @@
 # MemoRIA — Contexto para Claude
 
-**Proyecto:** Fine-tuning de Gemma 4 E2B sobre textos personales de Nico para aprender su estilo de escritura en tres registros: casual (WhatsApp), profesional (email) y académico.
+**Proyecto:** Fine-tuning de Gemma 3 4B sobre textos personales de Nico para aprender su estilo de escritura en tres registros: casual (WhatsApp), profesional (email) y académico.
 
 **Equipo:** Nico Karagozian, Clara Kearney, Valen Pivotto — UdeSA MIA NLP 2026  
 **Profesor:** Luciano Del Corro (pidió especialmente rigor en evaluación)
@@ -9,7 +9,7 @@
 
 ## Modelo
 
-- **HuggingFace:** `google/gemma-4-E2B-it`
+- **HuggingFace:** `google/gemma-3-4b-it`
 - **Ollama:** `memoria` (modelo fine-tuneado, tag local)
 - **Tamaño:** 2.3B params efectivos / 5.1B totales con embeddings
 - **Context:** 128K tokens
@@ -69,7 +69,7 @@ TP/
 │   ├── test_anonymize.py
 │   ├── test_build_dataset.py
 │   └── test_backend.py
-├── models/                    ← gemma4-e2b-4bit/ (gitignored)
+├── models/                    ← gemma3-4b-4bit/ (gitignored)
 ├── memoria-lora/              ← adaptador LoRA (gitignored)
 ├── memoria-merged/            ← modelo mergeado (gitignored)
 └── memoria-q4.gguf            ← GGUF para Ollama (gitignored)
@@ -111,7 +111,7 @@ huggingface-cli login
 | 5 | `parser-gmail` | Parsea .mbox → `processed/email_prof.jsonl` | 2–10 min |
 | 6 | `parser-academic` | Parsea PDFs/DOCX → `processed/academic.jsonl` | 2–5 min |
 | 7 | `build-dataset` | Formatea + split 80/10/10 → `dataset/train.jsonl` etc. + manifest | < 1 min |
-| 8 | `mlx-convert` | Cuantiza Gemma 4 E2B a 4-bit (**una sola vez**, ~15 min, ~2.8 GB) | ~15 min |
+| 8 | `mlx-convert` | Cuantiza Gemma 3 4B a 4-bit (**una sola vez**, ~15 min, ~2.8 GB) | ~15 min |
 | 9 | `finetuning-train` | Entrena LoRA con MLX-LM | ~25–40 min (M5) |
 | 10 | `inferencia` | Prueba los tres registros | < 1 min |
 | 11 | `merge-lora` | Mergea adaptador → `memoria-merged/` | ~5 min |
@@ -164,7 +164,7 @@ pytest tests/
 
 ### Por qué MLX-LM y no bitsandbytes
 
-`bitsandbytes` requiere CUDA — no corre en Mac. MLX-LM usa la memoria unificada de Apple Silicon directamente, sin copias CPU↔GPU. Con Gemma 4 E2B (5.1B params), 4-bit cuantización baja los pesos de ~10.2 GB a ~2.8 GB, lo que permite training holgado en 16 GB.
+`bitsandbytes` requiere CUDA — no corre en Mac. MLX-LM usa la memoria unificada de Apple Silicon directamente, sin copias CPU↔GPU. Con Gemma 3 4B (5.1B params), 4-bit cuantización baja los pesos de ~10.2 GB a ~2.8 GB, lo que permite training holgado en 16 GB.
 
 ### Por qué los prompts de train se muestrean de catálogos independientes
 
@@ -228,8 +228,8 @@ Copiar `.env.example` a `.env` y completar:
 ```
 AUTHOR_NAME=Nico                                    # nombre exacto como aparece en WhatsApp
 AUTHOR_EMAIL=nico.karagozian@gmail.com              # para filtrar emails enviados
-MODEL_ID=google/gemma-4-E2B-it
-MLX_MODEL_PATH=./models/gemma4-e2b-4bit
+MODEL_ID=google/gemma-3-4b-it
+MLX_MODEL_PATH=./models/gemma3-4b-4bit
 ADAPTER_PATH=./memoria-lora
 OLLAMA_URL=http://localhost:11434/api/generate      # incluir el path /api/generate
 OLLAMA_MODEL=memoria

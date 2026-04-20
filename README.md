@@ -1,6 +1,6 @@
 # MemoRIA
 
-Fine-tuning de Gemma 4 E2B sobre textos personales para aprender estilo de escritura en tres registros: casual (WhatsApp), profesional (email) y académico.
+Fine-tuning de Gemma 3 4B sobre textos personales para aprender estilo de escritura en tres registros: casual (WhatsApp), profesional (email) y académico.
 
 **Equipo:** Nico Karagozian, Clara Kearney, Valen Pivotto — UdeSA MIA NLP 2026
 
@@ -21,7 +21,7 @@ data/raw/
   data/dataset/train|val|test.jsonl
        │
        ▼
-  mlx_lm.convert  (cuantización 4-bit → models/gemma4-e2b-4bit/)
+  mlx_lm.convert  (cuantización 4-bit → models/gemma3-4b-4bit/)
        │
        ▼
   mlx_lm.lora     (fine-tuning LoRA → memoria-lora/)

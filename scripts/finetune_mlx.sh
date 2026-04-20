@@ -5,7 +5,7 @@
 set -euo pipefail
 
 ITERS=${1:-1000}
-MLX_MODEL="./models/gemma4-e2b-4bit"
+MLX_MODEL="./models/gemma3-4b-4bit"
 ADAPTER="./memoria-lora"
 DATA="data/dataset"
 
@@ -13,7 +13,7 @@ DATA="data/dataset"
 if [ ! -d "$MLX_MODEL" ]; then
   echo "⬇ Descargando y cuantizando Gemma 4 E2B a 4-bit..."
   mlx_lm.convert \
-    --hf-path google/gemma-4-E2B-it \
+    --hf-path google/gemma-3-4b-it \
     --mlx-path "$MLX_MODEL" \
     --quantize --q-bits 4 --q-group-size 64
   echo "✓ Modelo cuantizado en $MLX_MODEL"

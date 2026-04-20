@@ -7,7 +7,7 @@ import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
 
-MODEL_ID     = "google/gemma-4-E2B-it"
+MODEL_ID     = "google/gemma-3-4b-it"
 ADAPTER_PATH = "./memoria-lora"
 
 TAG_MAP = {
