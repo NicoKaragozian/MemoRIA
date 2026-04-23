@@ -2,10 +2,8 @@ import hashlib
 import json
 import logging
 import re
-from collections import Counter
+import statistics
 from pathlib import Path
-
-from scripts.anonymize import anonymize
 
 logger = logging.getLogger(__name__)
 
@@ -15,9 +13,11 @@ _REF_HEADERS = re.compile(
 )
 _PAGE_NUM = re.compile(r'^\s*\d{1,4}\s*$')
 
+# Separa oraciones de forma simple (no exhaustiva, suficiente para estadísticas)
+_SENT_SPLIT = re.compile(r'(?<=[.!?])\s+')
+
 
 def _extract_pdf(filepath: str) -> tuple[list[str], int]:
-    """Devuelve (lista de textos por página, total páginas)."""
     import pdfplumber
     pages = []
     with pdfplumber.open(filepath) as pdf:
@@ -41,7 +41,6 @@ def _extract_docx(filepath: str) -> str:
 
 
 def _clean_page(text: str) -> str:
-    """Elimina líneas de número de página y corta en la sección de referencias."""
     lines = text.splitlines()
     clean = []
     for line in lines:
@@ -54,7 +53,7 @@ def _clean_page(text: str) -> str:
 
 
 def _detect_repeated_lines(page_texts: list[str], threshold: float = 0.3) -> set[str]:
-    """Devuelve líneas que aparecen en >= threshold de páginas (headers/footers)."""
+    from collections import Counter
     n_pages = len(page_texts)
     if n_pages < 3:
         return set()
@@ -67,32 +66,58 @@ def _detect_repeated_lines(page_texts: list[str], threshold: float = 0.3) -> set
     return {line for line, cnt in line_counts.items() if cnt / n_pages >= threshold}
 
 
-def split_into_chunks(text: str, chunk_size: int = 400, overlap: int = 50) -> list[str]:
-    """Divide el texto en chunks de ~chunk_size palabras con overlap entre chunks."""
-    words = text.split()
-    if not words:
-        return []
-    chunks = []
-    start = 0
-    while start < len(words):
-        end = min(start + chunk_size, len(words))
-        chunks.append(" ".join(words[start:end]))
-        if end == len(words):
-            break
-        start = end - overlap
-    return chunks
-
-
 def _chunk_hash(text: str) -> str:
     normalized = re.sub(r'\s+', ' ', text.lower().strip())
     return hashlib.sha1(normalized.encode()).hexdigest()
 
 
-def parse_academic_folder(folder: str, min_chunk_len: int = 200) -> list[dict]:
+def _median_sentence_len(text: str) -> float:
+    sentences = [s.strip() for s in _SENT_SPLIT.split(text) if s.strip()]
+    if not sentences:
+        return 0.0
+    lengths = [len(s.split()) for s in sentences]
+    return statistics.median(lengths)
+
+
+def split_into_paragraph_chunks(
+    text: str,
+    min_words: int = 300,
+    max_words: int = 600,
+) -> list[str]:
+    """
+    Divide el texto en chunks respetando límites de párrafo.
+    Concatena párrafos hasta alcanzar min_words sin superar max_words.
+    Si un párrafo solo supera max_words, se divide en mitad de oraciones.
+    """
+    paragraphs = [p.strip() for p in re.split(r'\n\s*\n', text) if p.strip()]
+    chunks = []
+    current_parts: list[str] = []
+    current_words = 0
+
+    for para in paragraphs:
+        para_words = len(para.split())
+        if current_words + para_words > max_words and current_parts:
+            chunks.append("\n\n".join(current_parts))
+            current_parts = []
+            current_words = 0
+        current_parts.append(para)
+        current_words += para_words
+        if current_words >= min_words:
+            chunks.append("\n\n".join(current_parts))
+            current_parts = []
+            current_words = 0
+
+    if current_parts and current_words >= 100:
+        chunks.append("\n\n".join(current_parts))
+
+    return chunks
+
+
+def parse_academic_folder(folder: str, min_chunk_len: int = 300) -> list[dict]:
     """
     Procesa todos los PDFs y DOCX en la carpeta.
     Elimina headers/footers repetidos, referencias y chunks duplicados entre archivos.
-    Aplica anonimización de PII (dos pasadas) antes de retornar.
+    No aplica anonimización — datos son uso local exclusivo.
     """
     folder_path = Path(folder)
     files = list(folder_path.glob("**/*.pdf")) + list(folder_path.glob("**/*.docx"))
@@ -111,7 +136,7 @@ def parse_academic_folder(folder: str, min_chunk_len: int = 200) -> list[dict]:
                 for pt in page_texts:
                     lines = [l for l in pt.splitlines() if l.strip() not in repeated]
                     cleaned_pages.append("\n".join(lines))
-                text = "\n".join(cleaned_pages)
+                text = "\n\n".join(cleaned_pages)
             else:
                 text = _extract_docx(str(filepath))
 
@@ -119,19 +144,20 @@ def parse_academic_folder(folder: str, min_chunk_len: int = 200) -> list[dict]:
                 logger.warning("  Texto muy corto en %s, saltando", filepath.name)
                 continue
 
-            # Primera pasada de anonimización sobre texto completo
-            text = anonymize(text)
-
-            chunks = [c for c in split_into_chunks(text) if len(c) >= min_chunk_len]
+            chunks = split_into_paragraph_chunks(text)
             added = 0
             for chunk in chunks:
+                if len(chunk) < min_chunk_len:
+                    continue
+                # Descartar chunks con oraciones muy cortas (listas, TOC, bullets)
+                if _median_sentence_len(chunk) < 15:
+                    continue
                 h = _chunk_hash(chunk)
                 if h in seen_hashes:
                     continue
                 seen_hashes.add(h)
-                # Segunda pasada sobre el chunk final
                 examples.append({
-                    "text": anonymize(chunk),
+                    "text": chunk,
                     "source": filepath.name,
                     "register": "academic",
                 })

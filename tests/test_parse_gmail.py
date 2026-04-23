@@ -1,14 +1,12 @@
 """
 Tests para scripts/parse_gmail.py.
 Cubre: text/plain, text/html-only, multipart, firma, quotes Outlook/Gmail,
-match exacto de dirección de email.
+match exacto de dirección de email. Sin anonimización.
 """
 import mailbox
-import textwrap
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -33,8 +31,7 @@ def _simple_msg(sender: str, subject: str, body: str, content_type="text/plain")
 
 def _parse(mbox_path: str, email: str = "nico@example.com", min_len: int = 10):
     from scripts.parse_gmail import parse_mbox
-    with patch("scripts.parse_gmail.anonymize", side_effect=lambda x: x):
-        return parse_mbox(mbox_path, email, min_len=min_len)
+    return parse_mbox(mbox_path, email, min_len=min_len)
 
 
 # ── Tests ────────────────────────────────────────────────────────────────────
@@ -131,3 +128,16 @@ def test_min_len_filter(tmp_path):
     path = _make_mbox(tmp_path, [msg])
     results = _parse(path, min_len=100)
     assert len(results) == 0
+
+
+def test_no_placeholders_in_output(tmp_path):
+    """Sin anonimización, el texto de salida no debe contener placeholders de PII."""
+    body = "Hola Juan, te mando mi número: 11 1234-5678 y mi mail: juan@empresa.com. Saludos."
+    msg = _simple_msg("nico@example.com", "Contacto", body)
+    path = _make_mbox(tmp_path, [msg])
+    results = _parse(path)
+    assert len(results) == 1
+    for placeholder in ("<EMAIL>", "<PHONE>", "<PER>"):
+        assert placeholder not in results[0]["text"]
+    # El texto original debe estar preservado
+    assert "11 1234-5678" in results[0]["text"] or "juan@empresa.com" in results[0]["text"]

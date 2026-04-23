@@ -1,6 +1,6 @@
 # MemoRIA — Contexto para Claude
 
-**Proyecto:** Fine-tuning de Gemma 3 4B sobre textos personales de Nico para aprender su estilo de escritura en tres registros: casual (WhatsApp), profesional (email) y académico.
+**Proyecto:** Fine-tuning de Qwen 3 4B Instruct sobre textos personales de Nico para aprender su estilo de escritura en tres registros: casual (WhatsApp), profesional (email) y académico.
 
 **Equipo:** Nico Karagozian, Clara Kearney, Valen Pivotto — UdeSA MIA NLP 2026  
 **Profesor:** Luciano Del Corro (pidió especialmente rigor en evaluación)
@@ -9,12 +9,13 @@
 
 ## Modelo
 
-- **HuggingFace:** `google/gemma-3-4b-it`
+- **HuggingFace:** `Qwen/Qwen3-4B-Instruct-2507`
 - **Ollama:** `memoria` (modelo fine-tuneado, tag local)
-- **Tamaño:** 2.3B params efectivos / 5.1B totales con embeddings
-- **Context:** 128K tokens
+- **Tamaño:** ~4B params, cuantizado a 4-bit (~2.5 GB en disco)
+- **Context:** 32K tokens (nativo), extendible
 - En 16 GB unified RAM requiere cuantización 4-bit antes de entrenar. Sin 4-bit → OOM.
-- El modelo fine-tuneado **no publicar** — puede haber señales de PII aunque el pipeline de anonimización haya corrido.
+- Qwen 3 soporta role `system` nativo (a diferencia de Gemma 3).
+- El modelo fine-tuneado **no publicar** — datos de entrenamiento contienen textos personales sin anonimizar (privacidad personal, uso local exclusivo).
 
 ---
 
@@ -37,12 +38,12 @@ TP/
 │   │   └── academic/          ← PDFs y DOCX propios
 │   ├── processed/             ← generado por los parsers (gitignored)
 │   ├── dataset/               ← train/val/test.jsonl + manifest.json (gitignored)
-│   └── prompts/               ← catálogos de prompts por registro (casual/email_prof/academic.txt)
+│   ├── prompts/               ← catálogos de prompts por registro (casual/email_prof/academic.txt)
+│   └── system_prompts/        ← instrucciones de registro para Ollama/MLX (casual/email_prof/academic.txt)
 ├── scripts/
 │   ├── parse_whatsapp.py
 │   ├── parse_gmail.py
 │   ├── parse_academic.py
-│   ├── anonymize.py
 │   ├── build_dataset.py
 │   ├── seed.py                ← set_all_seeds() para reproducibilidad
 │   ├── finetune_mlx.sh
@@ -66,10 +67,9 @@ TP/
 │   ├── fixtures/              ← samples de WhatsApp/Gmail para tests
 │   ├── test_parse_whatsapp.py
 │   ├── test_parse_gmail.py
-│   ├── test_anonymize.py
 │   ├── test_build_dataset.py
 │   └── test_backend.py
-├── models/                    ← gemma3-4b-4bit/ (gitignored)
+├── models/                    ← qwen3-4b-4bit/ (gitignored)
 ├── memoria-lora/              ← adaptador LoRA (gitignored)
 ├── memoria-merged/            ← modelo mergeado (gitignored)
 └── memoria-q4.gguf            ← GGUF para Ollama (gitignored)
@@ -228,10 +228,11 @@ Copiar `.env.example` a `.env` y completar:
 ```
 AUTHOR_NAME=Nico                                    # nombre exacto como aparece en WhatsApp
 AUTHOR_EMAIL=nico.karagozian@gmail.com              # para filtrar emails enviados
-MODEL_ID=google/gemma-3-4b-it
-MLX_MODEL_PATH=./models/gemma3-4b-4bit
+MODEL_ID=Qwen/Qwen3-4B-Instruct-2507
+BASE_MODEL_NAME=qwen3-4b-instruct
+MLX_MODEL_PATH=./models/qwen3-4b-4bit
 ADAPTER_PATH=./memoria-lora
-OLLAMA_URL=http://localhost:11434/api/generate      # incluir el path /api/generate
+OLLAMA_URL=http://localhost:11434/api/chat          # /api/chat (no /api/generate)
 OLLAMA_MODEL=memoria
 
 # Opcionales (tienen defaults en backend/config.py)
@@ -251,8 +252,10 @@ RATE_LIMIT_HEALTH=30/minute
 |------------|---------|---------------|--------------|
 | E1 Perplexidad | Mejora relativa vs. modelo base | ≥ 20% | ≥ 35% |
 | E2 Estilo | Diferencia promedio en métricas | < 20% | < 10% |
+| E2b MAUVE | Score distribucional (nuevo) | > 0.5 | > 0.7 |
 | E3 Clasificador BETO | Accuracy del clasificador | < 75% | < 60% |
 | E4 Test ciego humano | % jueces que identifican el real | < 65% | < 55% |
+| Sanity | placeholder_emission_ratio | = 0% | = 0% |
 
 Todas las evaluaciones reportan intervalos de confianza 95%: bootstrap para E1/E2, Wilson para E3.
 
@@ -262,8 +265,8 @@ Todas las evaluaciones reportan intervalos de confianza 95%: bootstrap para E1/E
 
 **Fine-tuning no converge:**
 - Verificar que hay ≥ 400 ejemplos por registro en el train set
-- Bajar learning rate a `1e-4`
-- Aumentar `--iters` a 1500
+- Bajar learning rate a `2e-5`
+- Aumentar `--iters` a 1200 con early stopping en el checkpoint de mínimo val loss
 
 **OOM durante training (MLX):**
 - Cerrar browsers, Slack y apps pesadas antes de arrancar

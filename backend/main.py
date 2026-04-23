@@ -1,9 +1,11 @@
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
 import re
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Optional
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -54,18 +56,29 @@ app.add_middleware(_SecurityHeadersMiddleware)
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-REGISTER_TAGS = {
-    "casual":       "[CASUAL]",
-    "professional": "[EMAIL-PROF]",
-    "academic":     "[ACADÉMICO]",
+# Mapping de valores de la API → nombre del archivo de system prompt
+_REGISTER_FILE = {
+    "casual":       "casual",
+    "professional": "email_prof",  # mantenemos "professional" en la API para no romper frontend
+    "academic":     "academic",
 }
 
-# Tokens especiales de Gemma y literales de registro que no deben inyectarse
+# Tag inline que va en el turn de usuario, igual que durante el training
+_REGISTER_TAG = {
+    "casual":       "CASUAL",
+    "professional": "EMAIL-PROF",
+    "academic":     "ACADÉMICO",
+}
+
+# Tokens especiales de Qwen que no deben inyectarse como prompt de usuario
 _FORBIDDEN = re.compile(
-    r'<start_of_turn>|<end_of_turn>|<bos>|<eos>|<\|[^|]+\|>'
+    r'<\|im_start\|>|<\|im_end\|>|<\|endoftext\|>|<\|[^|]+\|>'
     r'|\[CASUAL\]|\[EMAIL-PROF\]|\[ACADÉMICO\]',
     re.IGNORECASE,
 )
+
+# System prompts cargados al startup
+_system_prompts: dict[str, str] = {}
 
 _stream_semaphore: asyncio.Semaphore | None = None
 
@@ -75,6 +88,30 @@ def _get_semaphore() -> asyncio.Semaphore:
     if _stream_semaphore is None:
         _stream_semaphore = asyncio.Semaphore(MAX_CONCURRENT_STREAMS)
     return _stream_semaphore
+
+
+def _load_system_prompts() -> dict[str, str]:
+    """Carga los system prompts desde data/system_prompts/ al arrancar."""
+    prompts: dict[str, str] = {}
+    base = Path("data/system_prompts")
+    for file_key in ("casual", "email_prof", "academic"):
+        path = base / f"{file_key}.txt"
+        if path.exists():
+            prompts[file_key] = path.read_text(encoding="utf-8").strip()
+        else:
+            logger.warning("System prompt no encontrado: %s", path)
+            prompts[file_key] = ""
+    return prompts
+
+
+@app.on_event("startup")
+async def startup_event():
+    global _system_prompts
+    _system_prompts = _load_system_prompts()
+    logger.info(
+        "System prompts cargados: %s",
+        {k: len(v) for k, v in _system_prompts.items()},
+    )
 
 
 def _sanitize_prompt(text: str) -> str:
@@ -91,7 +128,7 @@ class GenerateRequest(BaseModel):
     register:   Literal["casual", "professional", "academic"] = "casual"
     stream:     bool    = True
     max_tokens: int     = Field(default=500, ge=1, le=2000)
-    seed:       int | None = None
+    seed:       Optional[int] = None
 
 
 @app.get("/")
@@ -103,8 +140,14 @@ async def root():
 @limiter.limit(RATE_LIMIT_GENERATE)
 async def generate(req: GenerateRequest, request: Request):
     prompt_clean = _sanitize_prompt(req.prompt)
-    tag          = REGISTER_TAGS.get(req.register, "[CASUAL]")
-    full_prompt  = f"{tag} {prompt_clean}"
+    file_key     = _REGISTER_FILE.get(req.register, "casual")
+    tag          = _REGISTER_TAG.get(req.register, "CASUAL")
+    system_text  = _system_prompts.get(file_key, "")
+
+    messages: list[dict] = []
+    if system_text:
+        messages.append({"role": "system", "content": system_text})
+    messages.append({"role": "user", "content": f"[{tag}] {prompt_clean}"})
 
     options: dict = {
         "num_predict": req.max_tokens,
@@ -115,10 +158,10 @@ async def generate(req: GenerateRequest, request: Request):
         options["seed"] = req.seed
 
     payload = {
-        "model":   MODEL_NAME,
-        "prompt":  full_prompt,
-        "stream":  req.stream,
-        "options": options,
+        "model":    MODEL_NAME,
+        "messages": messages,
+        "stream":   req.stream,
+        "options":  options,
     }
 
     if req.stream:
@@ -135,7 +178,9 @@ async def generate(req: GenerateRequest, request: Request):
                                 except json.JSONDecodeError:
                                     logger.warning("Non-JSON line from Ollama: %s", line[:80])
                                     continue
-                                yield f"data: {json.dumps({'token': data.get('response', '')})}\n\n"
+                                # /api/chat devuelve message.content en vez de response
+                                token = data.get("message", {}).get("content", "")
+                                yield f"data: {json.dumps({'token': token})}\n\n"
                                 if data.get("done"):
                                     eval_count    = data.get("eval_count", 0)
                                     eval_duration = data.get("eval_duration", 1) or 1
@@ -156,7 +201,9 @@ async def generate(req: GenerateRequest, request: Request):
         async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
             response = await client.post(OLLAMA_URL, json=payload)
             response.raise_for_status()
-            return {"text": response.json().get("response", "")}
+            data = response.json()
+            text = data.get("message", {}).get("content", "")
+            return {"text": text}
     except httpx.TimeoutException:
         logger.exception("Ollama timeout (non-stream)")
         raise HTTPException(status_code=504, detail="upstream_timeout")

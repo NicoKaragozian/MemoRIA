@@ -1,17 +1,6 @@
 FROM /models/memoria.gguf
 
-TEMPLATE """<start_of_turn>user
-{{ .Prompt }}<end_of_turn>
-<start_of_turn>model
-"""
-
-SYSTEM """Sos un asistente de escritura personal. Escribís en el estilo de Nico.
-Registros disponibles: [CASUAL] para mensajes informales, [EMAIL-PROF] para emails profesionales, [ACADÉMICO] para textos académicos.
-Siempre empezá tu respuesta con el contenido directamente, sin metacomentarios."""
-
 PARAMETER temperature 0.8
 PARAMETER top_p 0.9
 PARAMETER repeat_penalty 1.1
 PARAMETER num_ctx 4096
-PARAMETER stop "<end_of_turn>"
-PARAMETER stop "<start_of_turn>"

@@ -2,6 +2,7 @@
 Utilidades de cliente Ollama reutilizables en tests (httpx.MockTransport).
 main.py contiene la lógica de streaming completa; este módulo expone helpers.
 """
+from __future__ import annotations
 import json
 from typing import AsyncGenerator
 
@@ -15,10 +16,51 @@ async def stream_generate(
     client: httpx.AsyncClient | None = None,
 ) -> AsyncGenerator[dict, None]:
     """
-    Genera tokens desde Ollama en streaming.
+    Genera tokens desde Ollama en streaming via /api/generate (legado).
     Yields dicts con claves: 'response', 'done', 'eval_count', 'eval_duration'.
     Acepta un client inyectado para facilitar tests con MockTransport.
     """
+    own_client = client is None
+    if own_client:
+        client = httpx.AsyncClient(timeout=timeout)
+    try:
+        async with client.stream("POST", ollama_url, json=payload) as response:
+            async for line in response.aiter_lines():
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                yield data
+                if data.get("done"):
+                    break
+    finally:
+        if own_client:
+            await client.aclose()
+
+
+async def chat_stream(
+    ollama_url: str,
+    messages: list[dict],
+    model: str,
+    options: dict | None = None,
+    timeout: int = 120,
+    client: httpx.AsyncClient | None = None,
+) -> AsyncGenerator[dict, None]:
+    """
+    Genera tokens desde Ollama en streaming via /api/chat.
+    Yields dicts con claves: 'message' (dict con 'content'), 'done', 'eval_count', 'eval_duration'.
+    Acepta un client inyectado para facilitar tests con MockTransport.
+    """
+    payload = {
+        "model":    model,
+        "messages": messages,
+        "stream":   True,
+    }
+    if options:
+        payload["options"] = options
+
     own_client = client is None
     if own_client:
         client = httpx.AsyncClient(timeout=timeout)

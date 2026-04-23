@@ -1,24 +1,31 @@
 """
 Inferencia con el modelo fine-tuneado (path HuggingFace MPS/CPU).
-Para Mac M5, preferir `mlx_lm.generate` desde la línea de comandos.
+Para Mac M5, preferir mlx_lm directamente desde el notebook.
 """
 
 import torch
+from pathlib import Path
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
 
-MODEL_ID     = "google/gemma-3-4b-it"
+MODEL_ID     = "Qwen/Qwen3-4B-Instruct-2507"
 ADAPTER_PATH = "./memoria-lora"
 
 TAG_MAP = {
-    "casual":     "[CASUAL]",
-    "email_prof": "[EMAIL-PROF]",
-    "academic":   "[ACADÉMICO]",
+    "casual":     "CASUAL",
+    "email_prof": "EMAIL-PROF",
+    "academic":   "ACADÉMICO",
 }
 
 
+def _load_system_prompt(register: str) -> str:
+    fname = "email_prof" if register == "email_prof" else register
+    path = Path(f"data/system_prompts/{fname}.txt")
+    return path.read_text(encoding="utf-8").strip() if path.exists() else ""
+
+
 def load_model(model_id: str = MODEL_ID, adapter_path: str = ADAPTER_PATH):
-    tokenizer = AutoTokenizer.from_pretrained(model_id, extra_special_tokens={})
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
     tokenizer.padding_side = "left"
 
     device = "mps" if torch.backends.mps.is_available() else "cpu"
@@ -39,12 +46,16 @@ def generate(
     prompt: str,
     max_new_tokens: int = 300,
 ) -> str:
-    tag = TAG_MAP.get(register, "[CASUAL]")
-    instruction = f"{tag} {prompt}"
+    tag = TAG_MAP.get(register, register.upper())
+    system_prompt = _load_system_prompt(register)
 
-    chat = [{"role": "user", "content": instruction}]
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": f"[{tag}] {prompt}"})
+
     input_text = tokenizer.apply_chat_template(
-        chat, tokenize=False, add_generation_prompt=True
+        messages, tokenize=False, add_generation_prompt=True
     )
 
     inputs = tokenizer(input_text, return_tensors="pt").to(model.device)

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 E2 — Métricas de estilo léxico-sintácticas.
 
@@ -176,3 +178,58 @@ def compare_styles(
         )
 
     return results
+
+
+# ── Sanity check: emisión de placeholders ─────────────────────────────────────
+
+_PLACEHOLDER_RE = re.compile(
+    r'<(EMAIL|PHONE|PER|LOC|ORG|URL|HANDLE|COORDS|CBU|IBAN|ID|NUM)>',
+    re.IGNORECASE,
+)
+
+
+def placeholder_emission_ratio(generated_texts: list[str]) -> float:
+    """
+    Porcentaje de generaciones que contienen placeholders de anonimización.
+    Debe ser ~0 en el pipeline nuevo (sin anonimización en los datos de training).
+    Un valor > 0 indica que el modelo aprendió tokens de anonimización.
+    """
+    count = sum(1 for t in generated_texts if _PLACEHOLDER_RE.search(t))
+    ratio = count / len(generated_texts) * 100 if generated_texts else 0.0
+    if ratio > 0:
+        print(f"⚠ placeholder_emission_ratio = {ratio:.1f}% "
+              f"({count}/{len(generated_texts)} generaciones con placeholders)")
+    else:
+        print(f"✓ placeholder_emission_ratio = 0% — sin placeholders en generaciones")
+    return ratio
+
+
+# ── MAUVE score ───────────────────────────────────────────────────────────────
+
+def compute_mauve(
+    real_texts: list[str],
+    generated_texts: list[str],
+    verbose: bool = False,
+) -> dict:
+    """
+    MAUVE score distribucional entre textos reales y generados.
+    Complementa la perplexidad: mide brecha distribucional completa, no solo NLL.
+    Requiere: pip install evaluate mauve-text
+    """
+    try:
+        import evaluate
+        mauve_metric = evaluate.load("mauve")
+        result = mauve_metric.compute(
+            predictions=generated_texts,
+            references=real_texts,
+            verbose=verbose,
+        )
+        score = float(result.mauve)
+        print(f"MAUVE score: {score:.4f} (1.0 = distribuciones idénticas)")
+        return {"mauve": score}
+    except ImportError:
+        print("⚠ MAUVE no disponible — instalar con: pip install evaluate mauve-text")
+        return {"mauve": None, "error": "evaluate/mauve-text no instalado"}
+    except Exception as e:
+        print(f"⚠ Error calculando MAUVE: {e}")
+        return {"mauve": None, "error": str(e)}

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 E3 — Clasificador de autoría con BETO.
 

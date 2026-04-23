@@ -1,12 +1,12 @@
 """
 Tests para scripts/build_dataset.py.
 Cubre: no-leakage (prompts no contienen palabras del target),
-split estratificado, dedup por hash, manifest escrito.
+formato messages de MLX-LM chat, split estratificado, dedup por hash, manifest escrito.
 """
 import json
 import random
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -33,6 +33,16 @@ def prompts_dir(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def system_prompts_dir(tmp_path: Path) -> Path:
+    d = tmp_path / "data" / "system_prompts"
+    d.mkdir(parents=True)
+    (d / "casual.txt").write_text("Sos Nico, escribís en tono coloquial argentino.", encoding="utf-8")
+    (d / "email_prof.txt").write_text("Sos Nico Karagozian. Escribís emails profesionales.", encoding="utf-8")
+    (d / "academic.txt").write_text("Sos el autor de un texto académico en español.", encoding="utf-8")
+    return d
+
+
+@pytest.fixture
 def dataset_dir(tmp_path: Path) -> Path:
     d = tmp_path / "data" / "dataset"
     d.mkdir(parents=True)
@@ -48,46 +58,59 @@ def _make_items(register: str, n: int, prefix: str = "") -> list[dict]:
 
 # ── Tests ────────────────────────────────────────────────────────────────────
 
-def test_no_leakage(tmp_path, prompts_dir, monkeypatch):
-    """Ningún prompt del catálogo debe contener las palabras del texto target."""
+def test_format_example_chat_format(tmp_path, prompts_dir, system_prompts_dir, monkeypatch):
+    """format_example debe retornar un dict con campo 'messages' en formato MLX-LM chat."""
     import scripts.build_dataset as bd
-    from scripts.build_dataset import format_example
-
-    # Limpiar cache de prompts para que _load_prompts use el tmp_path
     bd._prompts_cache.clear()
+    bd._system_cache.clear()
     monkeypatch.chdir(tmp_path)
 
     rng = random.Random(42)
-    mock_tokenizer = MagicMock()
-    mock_tokenizer.apply_chat_template.return_value = "<bos>hola<eos>"
-    mock_tokenizer.eos_token = "<eos>"
-    mock_tokenizer.encode.return_value = [1, 2, 3]
+    item = {"text": "Hola, ¿qué hacés? Te paso el número de Mati.", "register": "casual"}
+    result = bd.format_example(item, rng)
 
+    assert result is not None
+    assert "messages" in result
+    assert result["register"] == "casual"
+    messages = result["messages"]
+    roles = [m["role"] for m in messages]
+    assert "system" in roles
+    assert "user" in roles
+    assert "assistant" in roles
+    assistant_content = next(m["content"] for m in messages if m["role"] == "assistant")
+    assert assistant_content == item["text"]
+    user_content = next(m["content"] for m in messages if m["role"] == "user")
+    assert "[CASUAL]" in user_content
+
+
+def test_no_leakage(tmp_path, prompts_dir, system_prompts_dir, monkeypatch):
+    """Ningún prompt del catálogo debe contener las palabras del texto target."""
+    import scripts.build_dataset as bd
+    bd._prompts_cache.clear()
+    bd._system_cache.clear()
+    monkeypatch.chdir(tmp_path)
+
+    rng = random.Random(42)
     item = {"text": "Texto de ejemplo único para el test de leakage.", "register": "casual"}
 
     prompt_path = prompts_dir / "casual.txt"
     prompts = [l.strip() for l in prompt_path.read_text().splitlines() if l.strip()]
 
-    result = format_example(item, mock_tokenizer, rng)
-
-    # El prompt usado no debe contener palabras clave del target
     for prompt in prompts:
         prompt_words = set(prompt.lower().split())
         assert not prompt_words.issuperset({"texto", "ejemplo", "único", "leakage"}), \
             f"Prompt '{prompt}' contiene palabras del target"
 
 
-def test_deduplication(tmp_path, prompts_dir, dataset_dir):
-    """Textos duplicados (mismo hash normalizado) deben eliminarse antes del split."""
+def test_deduplication():
+    """Textos duplicados (mismo hash normalizado) deben tener el mismo hash."""
     from scripts.build_dataset import _item_hash
 
     text_a = "Este es un mensaje de prueba para el test de deduplicación."
     text_b = "  Este   es  un  mensaje  de  prueba  para  el  test  de  deduplicación.  "
 
-    hash_a = _item_hash(text_a)
-    hash_b = _item_hash(text_b)
-
-    assert hash_a == hash_b, "Textos equivalentes normalizados deben tener el mismo hash"
+    assert _item_hash(text_a) == _item_hash(text_b), \
+        "Textos equivalentes normalizados deben tener el mismo hash"
 
 
 def test_item_hash_normalization():
@@ -99,51 +122,94 @@ def test_item_hash_normalization():
     assert _item_hash("  texto  ") == _item_hash("texto")
 
 
-def test_manifest_written(tmp_path, prompts_dir):
-    """build_dataset debe escribir data/dataset/manifest.json con los campos requeridos."""
-    from scripts import build_dataset
-
-    dataset_path = tmp_path / "data" / "dataset"
-    dataset_path.mkdir(parents=True)
-
-    items_casual = _make_items("casual", 20)
-    items_email = _make_items("email_prof", 20)
-    items_academic = _make_items("academic", 20)
-
-    mock_tokenizer = MagicMock()
-    mock_tokenizer.apply_chat_template.return_value = [1] * 10
-    mock_tokenizer.eos_token = "</s>"
-    mock_tokenizer.decode.return_value = "texto"
-
-    def fake_format(item, tok, rng):
-        return {"text": item["text"], "register": item["register"]}
-
-    with (
-        patch.object(build_dataset, "_get_tokenizer", return_value=mock_tokenizer),
-        patch.object(build_dataset, "format_example", side_effect=fake_format),
-        patch.object(build_dataset, "Path", wraps=Path) as mock_p,
-    ):
-        with patch("builtins.open", wraps=open):
-            try:
-                build_dataset.build(
-                    items=items_casual + items_email + items_academic,
-                    out_dir=str(dataset_path),
-                    seed=42,
-                )
-            except Exception:
-                pass  # Si falla por otra razón, verificamos solo lo que se escribió
-
-    manifest_path = dataset_path / "manifest.json"
-    if manifest_path.exists():
-        manifest = json.loads(manifest_path.read_text())
-        assert "seed" in manifest
-        assert "counts" in manifest or "splits" in manifest
-
-
 def test_stratified_registers():
-    """Verifica que _item_hash genera hashes distintos para textos distintos."""
+    """Textos distintos deben tener hashes distintos."""
     from scripts.build_dataset import _item_hash
 
     texts = [f"Texto número {i} completamente diferente." for i in range(10)]
     hashes = [_item_hash(t) for t in texts]
     assert len(set(hashes)) == len(hashes), "Textos distintos deben tener hashes distintos"
+
+
+def test_manifest_written(tmp_path, prompts_dir, system_prompts_dir, monkeypatch):
+    """build_dataset debe escribir manifest.json con campos requeridos."""
+    import scripts.build_dataset as bd
+    bd._prompts_cache.clear()
+    bd._system_cache.clear()
+    monkeypatch.chdir(tmp_path)
+
+    casual_file = tmp_path / "casual.jsonl"
+    email_file = tmp_path / "email.jsonl"
+    academic_file = tmp_path / "academic.jsonl"
+    dataset_path = tmp_path / "data" / "dataset"
+    dataset_path.mkdir(parents=True)
+
+    for fpath, register in [
+        (casual_file, "casual"),
+        (email_file, "email_prof"),
+        (academic_file, "academic"),
+    ]:
+        with open(fpath, "w") as f:
+            for i in range(20):
+                f.write(json.dumps({"text": f"Texto {i} de {register} lo suficientemente largo.", "register": register}) + "\n")
+
+    bd.build_dataset(
+        casual_file=str(casual_file),
+        email_file=str(email_file),
+        academic_file=str(academic_file),
+        output_dir=str(dataset_path),
+        seed=42,
+    )
+
+    manifest_path = dataset_path / "manifest.json"
+    assert manifest_path.exists(), "manifest.json debe existir"
+    manifest = json.loads(manifest_path.read_text())
+    assert "seed" in manifest
+    assert "model_id" in manifest
+    assert "mlx_format" in manifest
+    assert manifest["mlx_format"] == "chat"
+    assert manifest["mask_prompt"] is True
+    assert "counts" in manifest
+    assert "train_by_register" in manifest
+
+
+def test_output_format_is_messages(tmp_path, prompts_dir, system_prompts_dir, monkeypatch):
+    """Las líneas del train.jsonl deben tener campo 'messages', no 'text'."""
+    import scripts.build_dataset as bd
+    bd._prompts_cache.clear()
+    bd._system_cache.clear()
+    monkeypatch.chdir(tmp_path)
+
+    casual_file = tmp_path / "casual.jsonl"
+    email_file = tmp_path / "email.jsonl"
+    academic_file = tmp_path / "academic.jsonl"
+    dataset_path = tmp_path / "data" / "dataset"
+    dataset_path.mkdir(parents=True)
+
+    for fpath, register in [
+        (casual_file, "casual"),
+        (email_file, "email_prof"),
+        (academic_file, "academic"),
+    ]:
+        with open(fpath, "w") as f:
+            for i in range(20):
+                f.write(json.dumps({"text": f"Texto {i} de {register} suficientemente largo.", "register": register}) + "\n")
+
+    bd.build_dataset(
+        casual_file=str(casual_file),
+        email_file=str(email_file),
+        academic_file=str(academic_file),
+        output_dir=str(dataset_path),
+        seed=42,
+    )
+
+    train_file = dataset_path / "train.jsonl"
+    assert train_file.exists()
+    with open(train_file) as f:
+        first_line = json.loads(f.readline())
+
+    assert "messages" in first_line, "Las líneas deben tener campo 'messages'"
+    assert "text" not in first_line, "Las líneas NO deben tener campo 'text' (modo chat, no texto plano)"
+    roles = [m["role"] for m in first_line["messages"]]
+    assert "user" in roles
+    assert "assistant" in roles

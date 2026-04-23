@@ -1,7 +1,17 @@
 """
-Combina los tres registros, formatea con el chat template real de Gemma 4,
-balancea y divide en train/val/test (80/10/10) con split estratificado.
-Los prompts se muestrean del catálogo data/prompts/ (sin palabras del target).
+Combina los tres registros, construye examples en formato chat de MLX-LM
+y divide en train/valid/test (80/10/10) con split estratificado.
+
+Formato de salida por línea JSONL (compatible con mlx_lm.lora --data en modo chat):
+  {"messages": [
+      {"role": "system", "content": "<system prompt del registro>"},
+      {"role": "user",   "content": "[REGISTRO] <prompt del catálogo>"},
+      {"role": "assistant", "content": "<texto original del usuario>"}
+  ], "register": "<registro>"}
+
+MLX-LM aplica tokenizer.apply_chat_template() automáticamente en modo chat.
+No pre-renderizamos el template aquí para garantizar que siempre coincide
+con el template del modelo usado en el training.
 """
 import hashlib
 import json
@@ -12,37 +22,35 @@ from pathlib import Path
 from collections import Counter
 from typing import Optional
 
-from transformers import AutoTokenizer
-
 logger = logging.getLogger(__name__)
 
-MODEL_ID = "google/gemma-3-4b-it"
-MAX_TOKEN_LEN = 2048
-
-_tokenizer = None
-
-
-def _get_tokenizer():
-    global _tokenizer
-    if _tokenizer is None:
-        # Workaround bug transformers 4.57.6: tokenizer_config.json de Gemma 4 trae
-        # extra_special_tokens como list ['<|video|>'] pero _set_model_specific_special_tokens
-        # espera dict. Pasar {} sobrescribe el config. <|video|> es solo para multimodal.
-        _tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, extra_special_tokens={})
-    return _tokenizer
+MODEL_ID = "Qwen/Qwen3-4B-Instruct-2507"
+# Límite conservador de tokens. Se usa estimación por chars para evitar
+# cargar el tokenizer en sistemas sin HF login. ~3 chars/token es conservador
+# para español (sobreestima → menos descartes falsos).
+MAX_CHARS_APPROX = 3000  # ≈ 1000 tokens
 
 
 def _load_prompts(register: str) -> list[str]:
-    """Carga los prompts del catálogo independiente para este registro."""
     fname = "email_prof" if register == "email_prof" else register
     path = Path("data/prompts") / f"{fname}.txt"
     if not path.exists():
         logger.warning("Catálogo de prompts no encontrado: %s", path)
-        return [f"[{register.upper()}] Escribí un texto en este registro."]
+        return [f"Escribí un texto en registro {register}."]
     return [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
+def _load_system_prompt(register: str) -> str:
+    fname = "email_prof" if register == "email_prof" else register
+    path = Path("data/system_prompts") / f"{fname}.txt"
+    if not path.exists():
+        logger.warning("System prompt no encontrado: %s", path)
+        return ""
+    return path.read_text(encoding="utf-8").strip()
+
+
 _prompts_cache: dict[str, list[str]] = {}
+_system_cache: dict[str, str] = {}
 
 
 def _get_prompts(register: str) -> list[str]:
@@ -51,44 +59,46 @@ def _get_prompts(register: str) -> list[str]:
     return _prompts_cache[register]
 
 
+def _get_system_prompt(register: str) -> str:
+    if register not in _system_cache:
+        _system_cache[register] = _load_system_prompt(register)
+    return _system_cache[register]
+
+
 def _item_hash(text: str) -> str:
     normalized = re.sub(r'\s+', ' ', text.lower().strip())
     return hashlib.sha1(normalized.encode()).hexdigest()
 
 
-def format_example(item: dict, tokenizer, rng) -> Optional[dict]:
+def format_example(item: dict, rng) -> Optional[dict]:
     """
-    Convierte un item raw al formato de chat de Gemma 4.
+    Convierte un item raw al formato messages de MLX-LM chat.
     El prompt se muestrea del catálogo — NO contiene palabras del target.
+    No aplica chat template: MLX-LM lo hace automáticamente.
     """
     register = item["register"]
     text = item["text"]
 
-    instruction = rng.choice(_get_prompts(register))
-
-    chat = [
-        {"role": "user", "content": instruction},
-        {"role": "assistant", "content": text},
-    ]
-    formatted = tokenizer.apply_chat_template(
-        chat,
-        tokenize=False,
-        add_generation_prompt=False,
-    )
-    if tokenizer.eos_token and not formatted.endswith(tokenizer.eos_token):
-        formatted = formatted + tokenizer.eos_token
-
-    token_len = len(tokenizer.encode(formatted))
-    if token_len > MAX_TOKEN_LEN:
+    # Estimación de longitud para descartar ejemplos excesivamente largos
+    if len(text) > MAX_CHARS_APPROX:
         logger.debug(
-            "Ejemplo descartado: %d tokens > %d (register=%s)", token_len, MAX_TOKEN_LEN, register
+            "Ejemplo descartado: %d chars > %d (register=%s)", len(text), MAX_CHARS_APPROX, register
         )
         return None
 
+    instruction = rng.choice(_get_prompts(register))
+    system_prompt = _get_system_prompt(register)
+    tag = register.replace("_", "-").upper()
+
+    messages: list[dict] = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": f"[{tag}] {instruction}"})
+    messages.append({"role": "assistant", "content": text})
+
     return {
-        "text": formatted,
+        "messages": messages,
         "register": register,
-        "original_text": text,
     }
 
 
@@ -134,7 +144,7 @@ def build_dataset(
     output_dir: str = "data/dataset",
     val_split: float = 0.1,
     test_split: float = 0.1,
-    max_per_register: int = 1000,
+    max_per_register: int = 800,
     seed: int = 42,
 ):
     from scripts.seed import set_all_seeds
@@ -156,13 +166,11 @@ def build_dataset(
     rng.shuffle(email);    email    = email[:max_per_register]
     rng.shuffle(academic); academic = academic[:max_per_register]
 
-    tokenizer = _get_tokenizer()
-
     all_examples = []
     skipped_long = 0
     for item in casual + email + academic:
         try:
-            ex = format_example(item, tokenizer, rng)
+            ex = format_example(item, rng)
             if ex is None:
                 skipped_long += 1
             else:
@@ -171,7 +179,7 @@ def build_dataset(
             logger.warning("Error formateando item: %s", e)
 
     if skipped_long:
-        logger.info("Descartados %d ejemplos por superar %d tokens", skipped_long, MAX_TOKEN_LEN)
+        logger.info("Descartados %d ejemplos por superar %d chars", skipped_long, MAX_CHARS_APPROX)
 
     from sklearn.model_selection import train_test_split
 
@@ -195,20 +203,19 @@ def build_dataset(
     output_path.mkdir(parents=True, exist_ok=True)
 
     _save_jsonl(train_set, output_path / "train.jsonl")
-    _save_jsonl(val_set,   output_path / "val.jsonl")
     _save_jsonl(val_set,   output_path / "valid.jsonl")   # mlx-lm usa valid.jsonl
     _save_jsonl(test_set,  output_path / "test.jsonl")
 
-    # Manifest de reproducibilidad
     import sklearn
-    import transformers as _tf
     manifest = {
         "created_at": datetime.utcnow().isoformat() + "Z",
+        "model_id": MODEL_ID,
+        "mlx_format": "chat",
+        "mask_prompt": True,
         "seed": seed,
         "max_per_register": max_per_register,
-        "max_token_len": MAX_TOKEN_LEN,
+        "max_chars_approx": MAX_CHARS_APPROX,
         "sklearn_version": sklearn.__version__,
-        "transformers_version": _tf.__version__,
         "counts": {
             "train": len(train_set),
             "val": len(val_set),
@@ -218,7 +225,7 @@ def build_dataset(
         "test_by_register":  dict(Counter(ex["register"] for ex in test_set)),
         "sha256": {
             "train": _sha256_file(output_path / "train.jsonl"),
-            "val":   _sha256_file(output_path / "val.jsonl"),
+            "valid": _sha256_file(output_path / "valid.jsonl"),
             "test":  _sha256_file(output_path / "test.jsonl"),
         },
         "prompts_sha1": {
