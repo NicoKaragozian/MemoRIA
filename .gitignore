@@ -19,11 +19,15 @@ _chat.txt
 models/
 memoria-lora/
 memoria-merged/
+memoria-merged.*/
 *.gguf
 *.safetensors
 *.bin
 *.pt
 *.pth
+
+# llama.cpp clonado para conversión a GGUF
+llama.cpp/
 
 # Clasificador entrenado (generado por eval/train_classifier.py)
 authorship-classifier/
