@@ -8,10 +8,12 @@
 ## Cambio de scope
 
 ### Objetivo original
-Generar fragmentos sueltos en el estilo de Clara dado un prompt genérico, distinguiendo tres registros (casual / email profesional / académico).
+Generar fragmentos sueltos en el estilo del usuario dado un prompt genérico, distinguiendo tres registros (casual / email profesional / académico).
 
 ### Objetivo nuevo
-Asistente que, dada una **conversación** (chat 1:1 o grupal) y un **mensaje recibido**, genera la **respuesta que Clara hubiera escrito** en ese contexto, manteniendo el estilo propio de esa conversación específica.
+Asistente que, dada una **conversación** (chat 1:1 o grupal) y un **mensaje recibido**, genera la **respuesta que el usuario hubiera escrito** en ese contexto, manteniendo el estilo propio de esa conversación específica.
+
+> **Nota sobre nomenclatura:** "el usuario" se refiere a la persona que entrena el modelo sobre sus propios datos. Su nombre exacto se configura en `.env` con `AUTHOR_NAME`. En los ejemplos de este documento usamos `[Usuario]` como placeholder.
 
 ### Por qué el cambio
 - El uso real apuntado es asistir a la escritura de respuestas a mensajes que llegan, no producir texto desconectado.
@@ -32,15 +34,15 @@ Asistente que, dada una **conversación** (chat 1:1 o grupal) y un **mensaje rec
 - **Conversación** = secuencia de turnos donde el gap entre turnos consecutivos es **< 6 horas**. Cuando la pausa supera ese umbral, se cierra la conversación y arranca una nueva.
 
 ### Pares de entrenamiento
-Cada turno de Clara que **no sea el primero** de una conversación genera un par:
+Cada turno del usuario que **no sea el primero** de una conversación genera un par:
 
 | Campo | Valor |
 |-------|-------|
 | `chat_name` | nombre del chat (1:1) o del grupo |
 | `is_group` | `true` / `false` |
-| `participants` | lista de autores del chat (excluyendo a Clara) |
-| `context` | últimos **20 mensajes** anteriores en la conversación (cualquier autor, incluyendo a Clara), cada uno con su autor |
-| `target` | turno de Clara (mensajes consecutivos unidos) |
+| `participants` | lista de autores del chat (excluyendo al usuario) |
+| `context` | últimos **20 mensajes** anteriores en la conversación (cualquier autor, incluyendo al usuario), cada uno con su autor |
+| `target` | turno del usuario (mensajes consecutivos unidos) |
 
 ### Filtros
 - Descartar pares cuyo `target` tenga **< 30 caracteres** (descarta "Dale", "Sí", "Ok" — no aportan señal de estilo). Esos mensajes igual cuentan como contexto válido para pares siguientes.
@@ -58,14 +60,14 @@ El modelo recibe el `chat_name` en el input (ej. `"Mechi Muino"`, `"Internationa
 Delfi: hoy comí lo más rico
 Luna: pasa la receta!!
 Delfi: te paso por insta
-Clara: yo tmb quiero
+[Usuario]: yo tmb quiero
 Delfi: les paso a las dos
 Luna: gracias amor
 
 [Tu próximo mensaje:]
 ```
 
-El target a generar es el siguiente turno completo de Clara.
+`[Usuario]` se sustituye en runtime por el `AUTHOR_NAME` configurado en `.env`. El target a generar es el siguiente turno completo del usuario.
 
 ---
 
@@ -75,16 +77,16 @@ El target a generar es el siguiente turno completo de Clara.
 |-----------|---------|-------------|
 | `CONTEXT_MESSAGES` | `20` | Cantidad de mensajes anteriores incluidos como contexto |
 | `CONVERSATION_GAP_HOURS` | `6` | Gap de tiempo (en horas) que cierra una conversación |
-| `MIN_TARGET_CHARS` | `30` | Largo mínimo del turno de Clara para considerarse target de entrenamiento |
+| `MIN_TARGET_CHARS` | `30` | Largo mínimo del turno del usuario para considerarse target de entrenamiento |
 
 ---
 
 ## Estimación de volumen
 
-Con los chats actuales en `data/raw/whatsapp/`:
+Estimación basada en los chats actuales del usuario que está entrenando ahora (`AUTHOR_NAME=Clara Kearney`). Los volúmenes van a variar para cada usuario según sus propios chats.
 
-| Chat | Tipo | Mensajes de Clara | Pares estimados |
-|------|------|-------------------|-----------------|
+| Chat | Tipo | Mensajes del usuario | Pares estimados |
+|------|------|----------------------|-----------------|
 | International girlies | Grupo (3 personas) | 2527 | ~1500 |
 | TFEC BK | Grupo | 2118 | ~1300 |
 | Maestria IA mesa chica | Grupo | 387 | ~200 |
