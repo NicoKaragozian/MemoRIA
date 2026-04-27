@@ -25,7 +25,7 @@ Asistente que, dada una **conversación** (chat 1:1 o grupal) y un **mensaje rec
 ## Decisiones de diseño
 
 ### Datos
-- **Solo WhatsApp** por ahora (descartado email y académico — no aplican al caso de uso).
+- **WhatsApp** en esta iteración. Email profesional y académico se incorporan en iteraciones siguientes (ver "Ideas para más adelante").
 - **Chats 1:1 y grupales** ambos incluidos. En grupos, el modelo aprende del contexto multi-autor.
 - Anonimización de PII se mantiene (ver `scripts/anonymize.py`).
 
@@ -113,7 +113,7 @@ Estimación basada en los chats actuales del usuario que está entrenando ahora 
 - **Feedback loop de contexto en la UI:** si la respuesta no es buena, botón "más contexto" que regenera con 40 → 60 → 80 mensajes hasta el límite de tokens.
 - **Identificación implícita de respuestas a mensajes específicos** (no al último): WhatsApp tiene reply explícito que rara vez está en el export, pero se podría heurizar.
 - **Filtrado de mensajes muy cortos del contexto** ("ja", "ok", "✅") si introducen demasiado ruido.
-- **Sumar email_prof y académico** para extender el caso de uso a esos registros.
+- **Sumar email_prof y académico** para extender el caso de uso a esos registros (planeado para iteraciones siguientes).
 - **Selector de modelo en la UI** para comparar `memoria` vs. modelos base.
 
 ---
