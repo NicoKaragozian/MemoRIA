@@ -13,6 +13,6 @@ mlx_lm.fuse \
   --model "$MLX_MODEL" \
   --adapter-path "$ADAPTER" \
   --save-path "$MERGED" \
-  --de-quantize
+  --dequantize
 
 echo "✓ Modelo mergeado en $MERGED (bf16, listo para convertir a GGUF)"
