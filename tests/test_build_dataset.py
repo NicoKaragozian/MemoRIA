@@ -1,149 +1,151 @@
 """
 Tests para scripts/build_dataset.py.
-Cubre: no-leakage (prompts no contienen palabras del target),
-split estratificado, dedup por hash, manifest escrito.
+
+Cubre:
+- Normalización del hash (dedup robusto a whitespace y case)
+- Dedup por target
+- Formato del user prompt (header 1:1 vs grupal, contexto, marcador final)
+- Frase de participantes (1, 2, 3+ personas)
+- format_example con tokenizer mock (retorna texto y descarta si supera MAX_TOKEN_LEN)
 """
-import json
-import random
-from pathlib import Path
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock
 
 
-# ── Fixtures ──────────────────────────────────────────────────────────────────
-
-@pytest.fixture
-def prompts_dir(tmp_path: Path) -> Path:
-    d = tmp_path / "data" / "prompts"
-    d.mkdir(parents=True)
-    (d / "casual.txt").write_text(
-        "Contame algo de tu día\nQué hiciste hoy?\nTenés planes para el finde?",
-        encoding="utf-8",
-    )
-    (d / "email_prof.txt").write_text(
-        "Redactá un email de seguimiento de proyecto\nEscribí un resumen ejecutivo",
-        encoding="utf-8",
-    )
-    (d / "academic.txt").write_text(
-        "Escribí una introducción sobre la fotosíntesis\nAnalizá las causas de la Primera Guerra Mundial",
-        encoding="utf-8",
-    )
-    return d
+def _sample_pair_one_on_one() -> dict:
+    return {
+        "chat_name": "Mi Amiga",
+        "is_group": False,
+        "participants": ["Mi Amiga"],
+        "context": [
+            {"author": "Mi Amiga", "text": "Hola!"},
+            {"author": "Mi Amiga", "text": "Cómo va?"},
+        ],
+        "target": "Bien todo, vos qué onda?",
+    }
 
 
-@pytest.fixture
-def dataset_dir(tmp_path: Path) -> Path:
-    d = tmp_path / "data" / "dataset"
-    d.mkdir(parents=True)
-    return d
+def _sample_pair_group() -> dict:
+    return {
+        "chat_name": "Grupo X",
+        "is_group": True,
+        "participants": ["Delfi", "Luna"],
+        "context": [
+            {"author": "Delfi", "text": "Hoy comí lo más rico"},
+            {"author": "Luna", "text": "pasa la receta!!"},
+            {"author": "Delfi", "text": "te paso por insta"},
+        ],
+        "target": "yo tmb quiero!! mandame ahora",
+    }
 
 
-def _make_items(register: str, n: int, prefix: str = "") -> list[dict]:
-    return [
-        {"text": f"{prefix}Texto ejemplo número {i} del registro {register} para testing.", "register": register}
-        for i in range(n)
-    ]
+# ── Hash y dedup ────────────────────────────────────────────────────────────
 
-
-# ── Tests ────────────────────────────────────────────────────────────────────
-
-def test_no_leakage(tmp_path, prompts_dir, monkeypatch):
-    """Ningún prompt del catálogo debe contener las palabras del texto target."""
-    import scripts.build_dataset as bd
-    from scripts.build_dataset import format_example
-
-    # Limpiar cache de prompts para que _load_prompts use el tmp_path
-    bd._prompts_cache.clear()
-    monkeypatch.chdir(tmp_path)
-
-    rng = random.Random(42)
-    mock_tokenizer = MagicMock()
-    mock_tokenizer.apply_chat_template.return_value = "<bos>hola<eos>"
-    mock_tokenizer.eos_token = "<eos>"
-    mock_tokenizer.encode.return_value = [1, 2, 3]
-
-    item = {"text": "Texto de ejemplo único para el test de leakage.", "register": "casual"}
-
-    prompt_path = prompts_dir / "casual.txt"
-    prompts = [l.strip() for l in prompt_path.read_text().splitlines() if l.strip()]
-
-    result = format_example(item, mock_tokenizer, rng)
-
-    # El prompt usado no debe contener palabras clave del target
-    for prompt in prompts:
-        prompt_words = set(prompt.lower().split())
-        assert not prompt_words.issuperset({"texto", "ejemplo", "único", "leakage"}), \
-            f"Prompt '{prompt}' contiene palabras del target"
-
-
-def test_deduplication(tmp_path, prompts_dir, dataset_dir):
-    """Textos duplicados (mismo hash normalizado) deben eliminarse antes del split."""
+def test_item_hash_normalizes_case_and_whitespace():
     from scripts.build_dataset import _item_hash
-
-    text_a = "Este es un mensaje de prueba para el test de deduplicación."
-    text_b = "  Este   es  un  mensaje  de  prueba  para  el  test  de  deduplicación.  "
-
-    hash_a = _item_hash(text_a)
-    hash_b = _item_hash(text_b)
-
-    assert hash_a == hash_b, "Textos equivalentes normalizados deben tener el mismo hash"
-
-
-def test_item_hash_normalization():
-    """_item_hash debe normalizar whitespace y case."""
-    from scripts.build_dataset import _item_hash
-
     assert _item_hash("Hola Mundo") == _item_hash("hola mundo")
     assert _item_hash("a  b   c") == _item_hash("a b c")
     assert _item_hash("  texto  ") == _item_hash("texto")
 
 
-def test_manifest_written(tmp_path, prompts_dir):
-    """build_dataset debe escribir data/dataset/manifest.json con los campos requeridos."""
-    from scripts import build_dataset
-
-    dataset_path = tmp_path / "data" / "dataset"
-    dataset_path.mkdir(parents=True)
-
-    items_casual = _make_items("casual", 20)
-    items_email = _make_items("email_prof", 20)
-    items_academic = _make_items("academic", 20)
-
-    mock_tokenizer = MagicMock()
-    mock_tokenizer.apply_chat_template.return_value = [1] * 10
-    mock_tokenizer.eos_token = "</s>"
-    mock_tokenizer.decode.return_value = "texto"
-
-    def fake_format(item, tok, rng):
-        return {"text": item["text"], "register": item["register"]}
-
-    with (
-        patch.object(build_dataset, "_get_tokenizer", return_value=mock_tokenizer),
-        patch.object(build_dataset, "format_example", side_effect=fake_format),
-        patch.object(build_dataset, "Path", wraps=Path) as mock_p,
-    ):
-        with patch("builtins.open", wraps=open):
-            try:
-                build_dataset.build(
-                    items=items_casual + items_email + items_academic,
-                    out_dir=str(dataset_path),
-                    seed=42,
-                )
-            except Exception:
-                pass  # Si falla por otra razón, verificamos solo lo que se escribió
-
-    manifest_path = dataset_path / "manifest.json"
-    if manifest_path.exists():
-        manifest = json.loads(manifest_path.read_text())
-        assert "seed" in manifest
-        assert "counts" in manifest or "splits" in manifest
-
-
-def test_stratified_registers():
-    """Verifica que _item_hash genera hashes distintos para textos distintos."""
+def test_item_hash_distinguishes_different_texts():
     from scripts.build_dataset import _item_hash
-
-    texts = [f"Texto número {i} completamente diferente." for i in range(10)]
+    texts = [f"Texto distinto número {i}" for i in range(10)]
     hashes = [_item_hash(t) for t in texts]
-    assert len(set(hashes)) == len(hashes), "Textos distintos deben tener hashes distintos"
+    assert len(set(hashes)) == len(hashes)
+
+
+def test_dedup_by_target():
+    from scripts.build_dataset import _dedup
+    pairs = [
+        {"target": "Mismo mensaje", "chat_name": "A"},
+        {"target": "  mismo  MENSAJE  ", "chat_name": "B"},  # equivalente al anterior
+        {"target": "Distinto", "chat_name": "C"},
+    ]
+    result = _dedup(pairs)
+    assert len(result) == 2
+    targets = {p["target"] for p in result}
+    assert "Mismo mensaje" in targets
+    assert "Distinto" in targets
+
+
+# ── Frase de participantes ──────────────────────────────────────────────────
+
+def test_participants_phrase_one_two_three():
+    from scripts.build_dataset import _participants_phrase
+    assert _participants_phrase([]) == ""
+    assert _participants_phrase(["Ana"]) == "Ana"
+    assert _participants_phrase(["Ana", "Beto"]) == "Ana y Beto"
+    assert _participants_phrase(["Ana", "Beto", "Cami"]) == "Ana, Beto y Cami"
+    assert _participants_phrase(["A", "B", "C", "D"]) == "A, B, C y D"
+
+
+# ── Formato del user prompt ─────────────────────────────────────────────────
+
+def test_user_prompt_one_on_one_header():
+    from scripts.build_dataset import _format_user_prompt
+    prompt = _format_user_prompt(_sample_pair_one_on_one())
+    assert prompt.startswith("[Chat con Mi Amiga]")
+    assert "[Tu próximo mensaje:]" in prompt
+
+
+def test_user_prompt_group_header_lists_participants():
+    from scripts.build_dataset import _format_user_prompt
+    prompt = _format_user_prompt(_sample_pair_group())
+    assert prompt.startswith("[Chat: Grupo X (con Delfi y Luna)]")
+    assert "[Tu próximo mensaje:]" in prompt
+
+
+def test_user_prompt_includes_authored_messages():
+    from scripts.build_dataset import _format_user_prompt
+    prompt = _format_user_prompt(_sample_pair_group())
+    assert "Delfi: Hoy comí lo más rico" in prompt
+    assert "Luna: pasa la receta!!" in prompt
+
+
+def test_user_prompt_no_target_in_input():
+    """El target NO debe filtrarse al user prompt."""
+    from scripts.build_dataset import _format_user_prompt
+    pair = _sample_pair_one_on_one()
+    prompt = _format_user_prompt(pair)
+    assert pair["target"] not in prompt
+
+
+# ── format_example ──────────────────────────────────────────────────────────
+
+def _mock_tokenizer(token_count: int = 100, eos: str = "<eos>"):
+    tok = MagicMock()
+    tok.apply_chat_template.return_value = "<bos>chat formateado<eos>"
+    tok.eos_token = eos
+    tok.encode.return_value = [0] * token_count
+    return tok
+
+
+def test_format_example_returns_expected_fields():
+    from scripts.build_dataset import format_example
+    tok = _mock_tokenizer(token_count=200)
+    result = format_example(_sample_pair_group(), tok)
+    assert result is not None
+    assert set(result.keys()) == {"text", "chat_name", "is_group", "target"}
+    assert result["chat_name"] == "Grupo X"
+    assert result["is_group"] is True
+    assert result["target"] == "yo tmb quiero!! mandame ahora"
+
+
+def test_format_example_skips_oversized():
+    from scripts.build_dataset import format_example, MAX_TOKEN_LEN
+    tok = _mock_tokenizer(token_count=MAX_TOKEN_LEN + 1)
+    result = format_example(_sample_pair_group(), tok)
+    assert result is None
+
+
+def test_format_example_passes_chat_to_tokenizer():
+    """El chat template debe llamarse con user + assistant en ese orden."""
+    from scripts.build_dataset import format_example
+    tok = _mock_tokenizer(token_count=200)
+    format_example(_sample_pair_one_on_one(), tok)
+    args, kwargs = tok.apply_chat_template.call_args
+    chat = args[0]
+    assert len(chat) == 2
+    assert chat[0]["role"] == "user"
+    assert chat[1]["role"] == "assistant"
+    assert chat[1]["content"] == "Bien todo, vos qué onda?"

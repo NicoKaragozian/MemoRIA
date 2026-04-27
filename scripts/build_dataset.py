@@ -1,7 +1,12 @@
 """
-Combina los tres registros, formatea con el chat template real de Gemma 4,
-balancea y divide en train/val/test (80/10/10) con split estratificado.
-Los prompts se muestrean del catálogo data/prompts/ (sin palabras del target).
+Combina pares conversacionales (output del parser de WhatsApp) en un dataset
+de fine-tuning para Gemma 3, con split estratificado train/val/test.
+
+Cada par se transforma a un mensaje de chat template:
+  - user:      header del chat + contexto formateado + "[Tu próximo mensaje:]"
+  - assistant: turno del usuario (target a aprender)
+
+Ver docs/CHATBOT_DESIGN.md para las decisiones de diseño.
 """
 import hashlib
 import json
@@ -32,43 +37,54 @@ def _get_tokenizer():
     return _tokenizer
 
 
-def _load_prompts(register: str) -> list[str]:
-    """Carga los prompts del catálogo independiente para este registro."""
-    fname = "email_prof" if register == "email_prof" else register
-    path = Path("data/prompts") / f"{fname}.txt"
-    if not path.exists():
-        logger.warning("Catálogo de prompts no encontrado: %s", path)
-        return [f"[{register.upper()}] Escribí un texto en este registro."]
-    return [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+def _participants_phrase(participants: list[str]) -> str:
+    """'A', 'A y B', 'A, B y C', etc."""
+    if not participants:
+        return ""
+    if len(participants) == 1:
+        return participants[0]
+    if len(participants) == 2:
+        return f"{participants[0]} y {participants[1]}"
+    return ", ".join(participants[:-1]) + f" y {participants[-1]}"
 
 
-_prompts_cache: dict[str, list[str]] = {}
-
-
-def _get_prompts(register: str) -> list[str]:
-    if register not in _prompts_cache:
-        _prompts_cache[register] = _load_prompts(register)
-    return _prompts_cache[register]
-
-
-def _item_hash(text: str) -> str:
-    normalized = re.sub(r'\s+', ' ', text.lower().strip())
-    return hashlib.sha1(normalized.encode()).hexdigest()
-
-
-def format_example(item: dict, tokenizer, rng) -> Optional[dict]:
+def _format_user_prompt(pair: dict) -> str:
     """
-    Convierte un item raw al formato de chat de Gemma 4.
-    El prompt se muestrea del catálogo — NO contiene palabras del target.
-    """
-    register = item["register"]
-    text = item["text"]
+    Construye el contenido del 'user' del chat template a partir del par
+    conversacional.
 
-    instruction = rng.choice(_get_prompts(register))
+    Formato:
+
+        [Chat: NombreGrupo (con A, B y C)]                    # si is_group
+        [Chat con NombreContacto]                             # si 1:1
+
+        A: ...
+        B: ...
+        AuthorName: ...
+        ...
+
+        [Tu próximo mensaje:]
+    """
+    if pair["is_group"]:
+        header = f"[Chat: {pair['chat_name']} (con {_participants_phrase(pair['participants'])})]"
+    else:
+        header = f"[Chat con {pair['chat_name']}]"
+
+    msg_lines = [f"{m['author']}: {m['text']}" for m in pair["context"]]
+    return f"{header}\n\n" + "\n".join(msg_lines) + "\n\n[Tu próximo mensaje:]"
+
+
+def format_example(pair: dict, tokenizer) -> Optional[dict]:
+    """
+    Convierte un par conversacional al formato de chat de Gemma 3.
+    Retorna None si supera MAX_TOKEN_LEN.
+    """
+    user_content = _format_user_prompt(pair)
+    target = pair["target"]
 
     chat = [
-        {"role": "user", "content": instruction},
-        {"role": "assistant", "content": text},
+        {"role": "user", "content": user_content},
+        {"role": "assistant", "content": target},
     ]
     formatted = tokenizer.apply_chat_template(
         chat,
@@ -81,15 +97,23 @@ def format_example(item: dict, tokenizer, rng) -> Optional[dict]:
     token_len = len(tokenizer.encode(formatted))
     if token_len > MAX_TOKEN_LEN:
         logger.debug(
-            "Ejemplo descartado: %d tokens > %d (register=%s)", token_len, MAX_TOKEN_LEN, register
+            "Par descartado: %d tokens > %d (chat=%s)",
+            token_len, MAX_TOKEN_LEN, pair.get("chat_name"),
         )
         return None
 
     return {
         "text": formatted,
-        "register": register,
-        "original_text": text,
+        "chat_name": pair["chat_name"],
+        "is_group": pair["is_group"],
+        "target": target,
     }
+
+
+def _item_hash(text: str) -> str:
+    """Hash sha1 del texto normalizado (lower + strip + collapse whitespace)."""
+    normalized = re.sub(r'\s+', ' ', text.lower().strip())
+    return hashlib.sha1(normalized.encode()).hexdigest()
 
 
 def _load_jsonl(path: str) -> list[dict]:
@@ -116,25 +140,53 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def _dedup(items: list[dict]) -> list[dict]:
+def _dedup(pairs: list[dict]) -> list[dict]:
+    """Deduplica pares por hash del target normalizado."""
     seen: set[str] = set()
     result = []
-    for it in items:
-        h = _item_hash(it.get("text", ""))
+    for p in pairs:
+        h = _item_hash(p.get("target", ""))
         if h not in seen:
             seen.add(h)
-            result.append(it)
+            result.append(p)
     return result
 
 
+def gather_pairs(raw_dir: str, processed_path: str, author_name: str,
+                 context_size: int = 20, gap_hours: float = 6.0,
+                 min_target_chars: int = 30) -> list[dict]:
+    """
+    Parsea todos los .txt de WhatsApp en `raw_dir` y guarda los pares
+    unificados en `processed_path`. Retorna la lista combinada.
+    """
+    from scripts.parse_whatsapp import parse_whatsapp
+
+    raw = Path(raw_dir)
+    files = sorted(raw.glob("*.txt"))
+    all_pairs: list[dict] = []
+    for f in files:
+        pairs = parse_whatsapp(
+            str(f), author_name,
+            context_size=context_size,
+            gap_hours=gap_hours,
+            min_target_chars=min_target_chars,
+        )
+        logger.info("%s: %d pares", f.name, len(pairs))
+        all_pairs.extend(pairs)
+
+    out_path = Path(processed_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    _save_jsonl(all_pairs, out_path)
+    logger.info("Total %d pares guardados en %s", len(all_pairs), out_path)
+    return all_pairs
+
+
 def build_dataset(
-    casual_file: str,
-    email_file: str,
-    academic_file: str,
+    pairs_file: str,
     output_dir: str = "data/dataset",
     val_split: float = 0.1,
     test_split: float = 0.1,
-    max_per_register: int = 1000,
+    max_total: Optional[int] = None,
     seed: int = 42,
 ):
     from scripts.seed import set_all_seeds
@@ -142,70 +194,74 @@ def build_dataset(
     set_all_seeds(seed)
     rng = random.Random(seed)
 
-    casual   = _load_jsonl(casual_file)
-    email    = _load_jsonl(email_file)
-    academic = _load_jsonl(academic_file)
-    logger.info("Raw — casual: %d, email: %d, academic: %d", len(casual), len(email), len(academic))
+    pairs = _load_jsonl(pairs_file)
+    logger.info("Cargados %d pares", len(pairs))
 
-    casual   = _dedup(casual)
-    email    = _dedup(email)
-    academic = _dedup(academic)
-    logger.info("Post-dedup — casual: %d, email: %d, academic: %d", len(casual), len(email), len(academic))
+    pairs = _dedup(pairs)
+    logger.info("Post-dedup: %d pares", len(pairs))
 
-    rng.shuffle(casual);   casual   = casual[:max_per_register]
-    rng.shuffle(email);    email    = email[:max_per_register]
-    rng.shuffle(academic); academic = academic[:max_per_register]
+    rng.shuffle(pairs)
+    if max_total is not None:
+        pairs = pairs[:max_total]
 
     tokenizer = _get_tokenizer()
 
-    all_examples = []
+    examples: list[dict] = []
     skipped_long = 0
-    for item in casual + email + academic:
+    for p in pairs:
         try:
-            ex = format_example(item, tokenizer, rng)
+            ex = format_example(p, tokenizer)
             if ex is None:
                 skipped_long += 1
             else:
-                all_examples.append(ex)
+                examples.append(ex)
         except Exception as e:
-            logger.warning("Error formateando item: %s", e)
+            logger.warning("Error formateando par: %s", e)
 
     if skipped_long:
-        logger.info("Descartados %d ejemplos por superar %d tokens", skipped_long, MAX_TOKEN_LEN)
+        logger.info("Descartados %d pares por superar %d tokens", skipped_long, MAX_TOKEN_LEN)
 
     from sklearn.model_selection import train_test_split
 
-    idx    = list(range(len(all_examples)))
-    strata = [ex["register"] for ex in all_examples]
+    idx = list(range(len(examples)))
+    strata = [ex["chat_name"] for ex in examples]
+    counts = Counter(strata)
 
-    idx_trainval, idx_test = train_test_split(
-        idx, test_size=test_split, stratify=strata, random_state=seed,
-    )
-    strata_tv = [strata[i] for i in idx_trainval]
-    effective_val = val_split / (1 - test_split)
-    idx_train, idx_val = train_test_split(
-        idx_trainval, test_size=effective_val, stratify=strata_tv, random_state=seed,
-    )
+    if min(counts.values(), default=0) < 2:
+        logger.warning("Algún chat tiene <2 ejemplos; split sin estratificar")
+        idx_trainval, idx_test = train_test_split(idx, test_size=test_split, random_state=seed)
+        effective_val = val_split / (1 - test_split)
+        idx_train, idx_val = train_test_split(
+            idx_trainval, test_size=effective_val, random_state=seed,
+        )
+    else:
+        idx_trainval, idx_test = train_test_split(
+            idx, test_size=test_split, stratify=strata, random_state=seed,
+        )
+        strata_tv = [strata[i] for i in idx_trainval]
+        effective_val = val_split / (1 - test_split)
+        idx_train, idx_val = train_test_split(
+            idx_trainval, test_size=effective_val, stratify=strata_tv, random_state=seed,
+        )
 
-    train_set = [all_examples[i] for i in idx_train]
-    val_set   = [all_examples[i] for i in idx_val]
-    test_set  = [all_examples[i] for i in idx_test]
+    train_set = [examples[i] for i in idx_train]
+    val_set = [examples[i] for i in idx_val]
+    test_set = [examples[i] for i in idx_test]
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
     _save_jsonl(train_set, output_path / "train.jsonl")
     _save_jsonl(val_set,   output_path / "val.jsonl")
-    _save_jsonl(val_set,   output_path / "valid.jsonl")   # mlx-lm usa valid.jsonl
+    _save_jsonl(val_set,   output_path / "valid.jsonl")  # mlx-lm usa valid.jsonl
     _save_jsonl(test_set,  output_path / "test.jsonl")
 
-    # Manifest de reproducibilidad
     import sklearn
     import transformers as _tf
     manifest = {
         "created_at": datetime.utcnow().isoformat() + "Z",
         "seed": seed,
-        "max_per_register": max_per_register,
+        "max_total": max_total,
         "max_token_len": MAX_TOKEN_LEN,
         "sklearn_version": sklearn.__version__,
         "transformers_version": _tf.__version__,
@@ -214,33 +270,37 @@ def build_dataset(
             "val": len(val_set),
             "test": len(test_set),
         },
-        "train_by_register": dict(Counter(ex["register"] for ex in train_set)),
-        "test_by_register":  dict(Counter(ex["register"] for ex in test_set)),
+        "train_by_chat": dict(Counter(ex["chat_name"] for ex in train_set)),
+        "test_by_chat": dict(Counter(ex["chat_name"] for ex in test_set)),
         "sha256": {
             "train": _sha256_file(output_path / "train.jsonl"),
             "val":   _sha256_file(output_path / "val.jsonl"),
             "test":  _sha256_file(output_path / "test.jsonl"),
         },
-        "prompts_sha1": {
-            reg: hashlib.sha1("\n".join(_get_prompts(reg)).encode()).hexdigest()
-            for reg in ("casual", "email_prof", "academic")
-        },
     }
     with open(output_path / "manifest.json", "w") as mf:
         json.dump(manifest, mf, indent=2, ensure_ascii=False)
 
-    reg_counts = Counter(ex["register"] for ex in train_set)
     print(f"\n✓ Dataset final:")
     print(f"  Train: {len(train_set)} | Val: {len(val_set)} | Test: {len(test_set)}")
-    print(f"  Distribución train: {dict(reg_counts)}")
+    print(f"  Distribución train por chat:")
+    for chat, count in Counter(ex["chat_name"] for ex in train_set).most_common():
+        print(f"    {chat}: {count}")
 
     return train_set, val_set, test_set
 
 
 if __name__ == "__main__":
+    import os
     logging.basicConfig(level=logging.INFO)
-    build_dataset(
-        casual_file="data/processed/casual.jsonl",
-        email_file="data/processed/email_prof.jsonl",
-        academic_file="data/processed/academic.jsonl",
+    AUTHOR = os.environ.get("AUTHOR_NAME") or "Author"
+
+    # Paso 1: parsear todos los chats y guardar pares unificados
+    gather_pairs(
+        raw_dir="data/raw/whatsapp",
+        processed_path="data/processed/whatsapp_pairs.jsonl",
+        author_name=AUTHOR,
     )
+
+    # Paso 2: split, formato chat template y manifest
+    build_dataset(pairs_file="data/processed/whatsapp_pairs.jsonl")
