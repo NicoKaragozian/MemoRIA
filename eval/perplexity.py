@@ -1,11 +1,10 @@
 """
 E1 — Perplexidad sobre el test set de textos reales.
 
-Correcciones vs. versión original:
-- Usa CrossEntropyLoss(reduction="none") para acumular NLL exacto (no sesgado por shift)
-- Enmascara tokens de padding con labels=-100
-- Warning cuando un texto supera max_length y se trunca
-- Bootstrap CI (N=1000) para reportar PPL con intervalo de confianza 95%
+Usa MLX-LM (Apple Silicon) en lugar de PyTorch/PEFT, compatible con
+los adaptadores LoRA generados por mlx_lm.lora.
+
+Bootstrap CI (N=1000) para reportar PPL con intervalo de confianza 95%.
 """
 
 import json
@@ -13,75 +12,54 @@ import logging
 import math
 
 import numpy as np
-import torch
-import torch.nn as nn
 from tqdm import tqdm
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from peft import PeftModel
 
 logger = logging.getLogger(__name__)
 
-MODEL_ID = "google/gemma-3-4b-it"
 
-
-def _compute_example_nll(
+def _compute_example_nll_mlx(
     model,
     tokenizer,
     texts: list[str],
-    batch_size: int = 4,
     max_length: int = 512,
 ) -> list[tuple[float, int]]:
     """
-    Devuelve lista de (nll_sum, n_tokens) por ejemplo.
-    Usa reduction="none" para acumulación exacta sin el sesgo del shift.
+    Devuelve lista de (nll_sum, n_tokens) por ejemplo usando MLX.
     """
+    import mlx.core as mx
+    import mlx.nn as nn
+
     model.eval()
-    loss_fct = nn.CrossEntropyLoss(reduction="none", ignore_index=-100)
     results = []
 
-    for i in tqdm(range(0, len(texts), batch_size), desc="Perplexity"):
-        batch = texts[i:i + batch_size]
-        enc = tokenizer(
-            batch,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=max_length,
-        ).to(model.device)
-
-        for j, (orig, trunc_ids) in enumerate(zip(batch, enc["input_ids"])):
-            orig_len = len(tokenizer.encode(orig, add_special_tokens=False))
-            if orig_len > max_length:
-                logger.warning(
-                    "Texto truncado: %d tokens → %d (perdiendo %d tokens)",
-                    orig_len, max_length, orig_len - max_length,
-                )
-
-        labels = enc["input_ids"].clone()
-        labels[enc["attention_mask"] == 0] = -100
-
-        with torch.no_grad():
-            outputs = model(
-                input_ids=enc["input_ids"],
-                attention_mask=enc["attention_mask"],
+    for text in tqdm(texts, desc="Perplexity"):
+        tokens = tokenizer.encode(text)
+        if len(tokens) > max_length:
+            logger.warning(
+                "Texto truncado: %d tokens → %d", len(tokens), max_length
             )
+            tokens = tokens[:max_length]
 
-        # Calcular loss token a token sin el sesgo del promedio de HF
-        shift_logits = outputs.logits[..., :-1, :].contiguous()
-        shift_labels = labels[..., 1:].contiguous()
-        vocab_size = shift_logits.size(-1)
+        if len(tokens) < 2:
+            continue
 
-        token_losses = loss_fct(
-            shift_logits.view(-1, vocab_size),
-            shift_labels.view(-1),
-        ).view(shift_labels.shape)
+        input_ids = mx.array([tokens])
+        # Forward pass
+        logits = model(input_ids)
+        # Shift: predecir token t+1 dado t
+        shift_logits = logits[:, :-1, :]   # (1, T-1, vocab)
+        shift_labels = mx.array([tokens[1:]])  # (1, T-1)
 
-        for j in range(len(batch)):
-            valid = (shift_labels[j] != -100)
-            nll_sum = token_losses[j][valid].sum().item()
-            n_tok   = valid.sum().item()
-            if n_tok > 0:
-                results.append((nll_sum, n_tok))
+        # Cross-entropy token a token
+        loss = nn.losses.cross_entropy(
+            shift_logits.reshape(-1, shift_logits.shape[-1]),
+            shift_labels.reshape(-1),
+            reduction="none",
+        )
+        mx.eval(loss)
+        nll_sum = float(loss.sum().item())
+        n_tok = len(tokens) - 1
+        results.append((nll_sum, n_tok))
 
     return results
 
@@ -97,17 +75,15 @@ def _bootstrap_ppl(
     ns   = np.array([k for _, k in example_nlls])
     ppls = []
     for _ in range(n_boot):
-        idx  = rng.integers(0, len(nlls), size=len(nlls))
+        idx = rng.integers(0, len(nlls), size=len(nlls))
         ppls.append(np.exp(nlls[idx].sum() / ns[idx].sum()))
     ppls = np.array(ppls)
     return float(np.median(ppls)), float(np.percentile(ppls, 2.5)), float(np.percentile(ppls, 97.5))
 
 
-def compute_perplexity(model, tokenizer, texts: list[str], batch_size: int = 4) -> dict:
-    """
-    Devuelve dict con 'ppl', 'ci_low', 'ci_high' (bootstrap 95%).
-    """
-    example_nlls = _compute_example_nll(model, tokenizer, texts, batch_size)
+def compute_perplexity_mlx(model, tokenizer, texts: list[str]) -> dict:
+    """Devuelve dict con 'ppl', 'ci_low', 'ci_high' (bootstrap 95%)."""
+    example_nlls = _compute_example_nll_mlx(model, tokenizer, texts)
     total_nll = sum(n for n, _ in example_nlls)
     total_tok = sum(k for _, k in example_nlls)
     ppl = math.exp(total_nll / total_tok)
@@ -117,38 +93,52 @@ def compute_perplexity(model, tokenizer, texts: list[str], batch_size: int = 4) 
 
 def eval_perplexity(
     test_file: str,
-    model_id: str = MODEL_ID,
+    model_id: str = "models/gemma3-4b-4bit",
     adapter_path: str = None,
 ):
+    """
+    Evalúa perplexidad del modelo base y fine-tuneado usando MLX-LM.
+
+    Args:
+        test_file:    Path al test.jsonl del dataset.
+        model_id:     Path local al modelo base cuantizado (MLX format).
+        adapter_path: Path al directorio con adapters.safetensors (MLX LoRA).
+    """
+    from mlx_lm import load
+
+    # Extraer textos del turno assistant
     texts = []
     with open(test_file) as f:
         for line in f:
             item = json.loads(line)
-            texts.append(item["original_text"])
+            assistant_text = next(
+                (m["content"] for m in item["messages"] if m["role"] == "assistant"),
+                None,
+            )
+            if assistant_text:
+                texts.append(assistant_text)
 
     print(f"Evaluando perplexidad sobre {len(texts)} textos del test set")
 
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
-    tokenizer = AutoTokenizer.from_pretrained(model_id, extra_special_tokens={})
-
+    # ── Modelo BASE ──────────────────────────────────────────────────────────
     print("\n[1/2] Modelo BASE...")
-    base_model = AutoModelForCausalLM.from_pretrained(
-        model_id, torch_dtype=torch.bfloat16, device_map={"": device}
+    base_model, tokenizer = load(model_id)
+    res_base = compute_perplexity_mlx(base_model, tokenizer, texts)
+    print(
+        f"  PPL base: {res_base['ppl']:.2f} "
+        f"[IC 95%: {res_base['ci_low_95']:.2f}–{res_base['ci_high_95']:.2f}]"
     )
-    res_base = compute_perplexity(base_model, tokenizer, texts)
-    print(f"  PPL base: {res_base['ppl']:.2f} [IC 95%: {res_base['ci_low_95']:.2f}–{res_base['ci_high_95']:.2f}]")
     del base_model
-    if device == "mps":
-        torch.mps.empty_cache()
 
+    # ── Modelo FINE-TUNEADO ───────────────────────────────────────────────────
     if adapter_path:
         print("\n[2/2] Modelo FINE-TUNEADO...")
-        ft_model = AutoModelForCausalLM.from_pretrained(
-            model_id, torch_dtype=torch.bfloat16, device_map={"": device}
+        ft_model, tokenizer = load(model_id, adapter_path=adapter_path)
+        res_ft = compute_perplexity_mlx(ft_model, tokenizer, texts)
+        print(
+            f"  PPL fine-tuneado: {res_ft['ppl']:.2f} "
+            f"[IC 95%: {res_ft['ci_low_95']:.2f}–{res_ft['ci_high_95']:.2f}]"
         )
-        ft_model = PeftModel.from_pretrained(ft_model, adapter_path)
-        res_ft = compute_perplexity(ft_model, tokenizer, texts)
-        print(f"  PPL fine-tuneado: {res_ft['ppl']:.2f} [IC 95%: {res_ft['ci_low_95']:.2f}–{res_ft['ci_high_95']:.2f}]")
 
         improvement = (res_base["ppl"] - res_ft["ppl"]) / res_base["ppl"] * 100
         print(f"\n  Mejora relativa: {improvement:.1f}%")
@@ -167,7 +157,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     results = eval_perplexity(
         test_file="data/dataset/test.jsonl",
-        model_id=MODEL_ID,
-        adapter_path="./memoria-lora",
+        model_id="models/gemma3-4b-4bit",
+        adapter_path="memoria-lora",
     )
     print(f"\nResultados: {results}")

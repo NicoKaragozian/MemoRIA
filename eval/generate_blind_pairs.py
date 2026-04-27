@@ -31,7 +31,7 @@ def _load_test_texts(test_file: str) -> dict[str, list[str]]:
             item = json.loads(line)
             reg = item["register"]
             if reg in result:
-                result[reg].append(item["original_text"])
+                result[reg].append(next(m["content"] for m in item["messages"] if m["role"] == "assistant"))
     return result
 
 
