@@ -27,11 +27,12 @@ Asistente que, dada una **conversación** (chat 1:1 o grupal) y un **mensaje rec
 ### Datos
 - **WhatsApp** en esta iteración. Email profesional y académico se incorporan en iteraciones siguientes (ver "Ideas para más adelante").
 - **Chats 1:1 y grupales** ambos incluidos. En grupos, el modelo aprende del contexto multi-autor.
-- Anonimización de PII se mantiene (ver `scripts/anonymize.py`).
+- **Anonimización de PII** se aplica al **contenido** de los mensajes (teléfonos, emails, URLs, DNIs, CBUs, nombres propios mencionados dentro del texto). Los **nombres de los autores se preservan sin anonimizar**, porque son la señal que le permite al modelo distinguir interlocutores y modular el estilo. Como el modelo no se publica (uso personal), la exposición de nombres de contactos en los pesos del modelo es aceptable.
 
 ### Segmentación de conversaciones
 - **Turno** = uno o más mensajes consecutivos del mismo autor sin interrupción de otro autor en el medio.
-- **Conversación** = secuencia de turnos donde el gap entre turnos consecutivos es **< 6 horas**. Cuando la pausa supera ese umbral, se cierra la conversación y arranca una nueva.
+- **Conversación** = secuencia de mensajes donde el gap entre **mensajes consecutivos** es **< 6 horas**. Cuando dos mensajes consecutivos tienen un gap mayor, se cierra la conversación y arranca una nueva.
+- **Mensajes de sistema** (multimedia omitido, audio omitido, "Messages and calls are end-to-end encrypted", etc.) se filtran completamente — no aparecen como contexto ni como target, y no rompen turnos.
 
 ### Pares de entrenamiento
 Cada turno del usuario que **no sea el primero** de una conversación genera un par:
@@ -46,7 +47,6 @@ Cada turno del usuario que **no sea el primero** de una conversación genera un 
 
 ### Filtros
 - Descartar pares cuyo `target` tenga **< 30 caracteres** (descarta "Dale", "Sí", "Ok" — no aportan señal de estilo). Esos mensajes igual cuentan como contexto válido para pares siguientes.
-- Descartar pares cuyo último mensaje del contexto sea solo un mensaje de sistema (multimedia omitido, audio omitido, etc.).
 - Descartar el primer turno de cada conversación (no tiene mensaje recibido).
 
 ### Estilo por interlocutor
