@@ -98,13 +98,76 @@ Estimación basada en los chats actuales del usuario que está entrenando ahora 
 ## Plan de trabajo
 
 - [x] Crear branch + design doc inicial
-- [ ] Reescribir `scripts/parse_whatsapp.py` para extraer pares conversacionales
-- [ ] Adaptar `scripts/build_dataset.py` al nuevo formato
-- [ ] Definir nuevo chat template y tokenización en `build_dataset.py`
-- [ ] Re-entrenar con MLX-LM (LoRA) sobre el nuevo dataset
+- [x] Reescribir `scripts/parse_whatsapp.py` para extraer pares conversacionales
+- [x] Adaptar `scripts/build_dataset.py` al nuevo formato
+- [x] Definir nuevo chat template y tokenización en `build_dataset.py`
+- [x] Re-entrenar con MLX-LM (LoRA) sobre el nuevo dataset
 - [ ] Adaptar UI (`backend/static/`): textareas para chat name + contexto + mensaje recibido
 - [ ] Adaptar backend `/generate` para aceptar el nuevo input
 - [ ] Verificar end-to-end con conversación real
+- [ ] Iterar sobre la calidad del modelo (ver "Estado al cierre de iteración 1")
+
+---
+
+## Estado al cierre de iteración 1 (2026-04-27)
+
+### Lo que quedó funcionando
+
+Pipeline end-to-end completo desde chats `.txt` hasta modelo entrenado:
+
+1. **Parser conversacional** ([scripts/parse_whatsapp.py](../scripts/parse_whatsapp.py)) — 14 tests pasando, extrae pares (contexto + target) preservando autores y filtrando mensajes de sistema.
+2. **Build dataset** ([scripts/build_dataset.py](../scripts/build_dataset.py)) — 11 tests pasando, formatea pares al chat template de Gemma, dedupea y estratifica por chat.
+3. **Reentrenamiento** completo: 2000 iters / `lr=2e-4` / LoRA 16 layers.
+
+### Volumen real
+
+| Chat | Pares |
+|------|-------|
+| TFEC BK | 1539 |
+| International girlies | 511 |
+| Maestria IA mesa chica | 273 |
+| Mechi Muino | 197 |
+| **Total parseado** | **2520** |
+| Post-dedup | 2509 |
+| Descartados por > MAX_TOKEN_LEN | 2 |
+| **Train / Val / Test** | **2005 / 251 / 251** |
+
+### Resultado del entrenamiento
+
+| Métrica | Iteración 0 (1000 iters, formato viejo) | Iteración 1 (2000 iters, formato conversacional) |
+|---------|-----------------------------------------|--------------------------------------------------|
+| Train loss final | 3.2 | **2.4** |
+| Val loss final | 3.5 | **2.9** |
+| Tiempo de entrenamiento | 7 min | ~71 min |
+
+### Smoke test sobre el test set
+
+El modelo lee el contexto y genera algo en formato chat (no copia el último autor cuando hay sampling con temperatura), pero **la calidad del contenido es muy baja**: respuestas incoherentes, repeticiones de tokens del anonimizador (`<PER>`, `<LOC>`), a veces empieza a generar otro turno con prefijo de autor.
+
+### Causas probables (a investigar en próximas iteraciones)
+
+1. **Loss alto** (val 2.9) — el modelo no convergió bien.
+2. **Gemma 3 4B-it tiene un prior muy "instruct"** — el LoRA chico (16 layers, rank por defecto) no tiene fuerza para reorientar el modelo a chat informal de WhatsApp.
+3. **2000 ejemplos es poco** para una task generativa abierta donde cada respuesta es única.
+4. **Anonimización agresiva** — `<PER>` / `<LOC>` aparecen frecuentemente y el modelo los aprende como noise pattern.
+
+### Caminos para mejorar (cualquiera en branch separada)
+
+| Opción | Esfuerzo | Hipótesis |
+|--------|----------|-----------|
+| Más iters (3000-5000) y/o más layers (32) | ~3 hs | Mejor convergencia |
+| Reentrenar sobre `gemma-3-4b` base (no `-it`) | ~4 hs | Menos prior "instruct" que combatir |
+| Sumar email_prof y académico | depende de datos | Más material, mejor estilo en general |
+| Filtrar más agresivamente targets con muchos `<PER>`/`<LOC>` | ~1 hs | Reducir noise pattern |
+| Bajar `min_target_chars` o cambiar segmentación | ~1 hs | Más datos, ver tradeoff |
+
+### Próximos pasos concretos para esta branch
+
+1. **Adaptar UI** ([backend/static/](../backend/static/)): textareas para chat name + contexto + mensaje recibido + botón "Generar"
+2. **Adaptar backend** `/generate`: nueva firma con `chat_name`, `is_group`, `context[]`, construir el prompt con la misma lógica que `_format_user_prompt` de `build_dataset.py`
+3. Re-exportar a GGUF y registrar en Ollama como `memoria-v2` (mantener `memoria` viejo para comparar)
+4. Probar end-to-end en `127.0.0.1:8000` con conversación real
+5. Una vez funcionando: abrir branches separadas para iterar el modelo (ver tabla arriba) y para observabilidad/evals (ver [OBSERVABILIDAD_EVALS.md](OBSERVABILIDAD_EVALS.md))
 
 ---
 
