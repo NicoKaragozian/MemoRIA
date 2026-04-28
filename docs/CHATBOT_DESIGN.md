@@ -73,21 +73,94 @@ Persona2: gracias amor
 
 ## Pipeline de entrenamiento
 
-El modelo se entrena en dos etapas conceptuales: una etapa supervisada inicial sobre los chats del usuario, y una etapa posterior de aprendizaje por preferencias sobre el feedback que el usuario va generando al usar la app.
+El modelo se entrena en dos etapas conceptuales: una etapa supervisada inicial sobre los chats del usuario (SFT), y una etapa posterior de aprendizaje por preferencias sobre el feedback que el usuario va generando al usar la app (DPO).
+
+### Vista general
+
+```
+                    ┌─────────────────────────────────────────────┐
+                    │  Etapa 0 — Preparación de datos             │
+data/raw/*.txt ────►│  parse_whatsapp.py + build_dataset.py       │
+                    │  Output: data/dataset/{train,val,test}.jsonl│
+                    └────────────────────┬────────────────────────┘
+                                         ▼
+                    ┌─────────────────────────────────────────────┐
+                    │  Etapa 1 — SFT con LoRA sobre Gemma 3 4B    │
+                    │  finetune_mlx.sh                             │
+                    │  Output: memoria-lora/                       │
+                    │  Métricas: train/val loss, perplexity vs    │
+                    │  base, smoke test, style metrics            │
+                    └────────────────────┬────────────────────────┘
+                                         ▼
+                    ┌─────────────────────────────────────────────┐
+                    │  Etapa 2 — Deploy + recolección             │
+                    │  merge_mlx.sh + export_gguf.sh + UI         │
+                    │  Output: data/feedback/feedback.jsonl        │
+                    │  Métricas: tasa de elección por seed,       │
+                    │  diversidad inter-opciones                   │
+                    └────────────────────┬────────────────────────┘
+                                         ▼ (cuando hay ~50-100 elecciones)
+                    ┌─────────────────────────────────────────────┐
+                    │  Etapa 3 — DPO sobre preferencias           │
+                    │  Output: memoria-dpo-lora/                   │
+                    │  Métricas: A/B vs SFT en eval set fijo,     │
+                    │  reward margin, KL vs SFT base               │
+                    └────────────────────┬────────────────────────┘
+                                         ▼
+                                Loop iterativo
+                       (deploy → feedback → DPO → eval)
+```
+
+### Etapa 0 — Preparación de datos
+
+**Status:** implementado y probado.
+
+```bash
+# AUTHOR_NAME debe estar en .env (cómo aparece el usuario en sus chats)
+export AUTHOR_NAME="Tu Nombre"
+export HF_TOKEN=$(cat ~/.huggingface/token)
+
+python -m scripts.build_dataset
+```
+
+**Outputs:**
+
+- `data/processed/whatsapp_pairs.jsonl` — pares (contexto, target) por archivo de chat
+- `data/dataset/train.jsonl` — 80% de los pares con chat template de Gemma aplicado
+- `data/dataset/val.jsonl` y `valid.jsonl` — 10% para early stopping
+- `data/dataset/test.jsonl` — 10% reservado para evaluación (no se toca durante training)
+- `data/dataset/manifest.json` — seed, hashes, counts por chat, versiones de sklearn/transformers
+
+**Métricas que aplican en esta etapa:**
+
+| Métrica | Cómo se mide | Cuándo |
+|---------|--------------|--------|
+| Cantidad de pares por chat | `manifest.json:train_by_chat` | Cada vez que se regenera el dataset |
+| Distribución de tokens por ejemplo | tokenize cada ejemplo y graficar | Sanity check antes de entrenar |
+| Pares descartados por > MAX_TOKEN_LEN | log de `build_dataset.py` | Durante regeneración |
+| % de turnos del usuario filtrados por `min_target_chars` | comparar `parse_whatsapp` raw vs filtrado | Sanity check |
 
 ### Etapa 1 — Supervised Fine-Tuning (SFT)
 
-**Estado:** implementado en esta iteración.
+**Status:** implementado. Resultado actual con calidad baja, listo para iterar.
 
-**Qué es:** entrenamiento supervisado clásico, donde el modelo aprende a maximizar la probabilidad de la respuesta real del usuario dado el contexto. El "ground truth" es lo que el usuario efectivamente escribió en su chat.
+**Qué es:** entrenamiento supervisado clásico. El modelo aprende a maximizar la probabilidad de la respuesta real del usuario dado el contexto. El "ground truth" es lo que el usuario efectivamente escribió en su chat.
 
-**Cómo funciona:**
+**Cómo:**
 
-1. El parser construye pares `(contexto, respuesta_real_del_usuario)` a partir de los chats de WhatsApp.
+1. El parser construye pares `(contexto, respuesta_real_del_usuario)` desde los chats de WhatsApp.
 2. `build_dataset.py` los formatea con el chat template de Gemma 3:
    - `user`: header del chat + contexto de los últimos N mensajes
    - `assistant`: el turno real del usuario (target)
 3. Se entrena con **MLX-LM LoRA** sobre Gemma 3 4B cuantizado a 4-bit (Apple Silicon).
+
+```bash
+# Cuantizar el modelo base (una sola vez, ~3-15 min)
+# Esto lo hace finetune_mlx.sh la primera vez.
+
+# Entrenar
+bash scripts/finetune_mlx.sh 2000   # 2000 iters
+```
 
 **Hiperparámetros usados en esta iteración:**
 
@@ -96,61 +169,137 @@ El modelo se entrena en dos etapas conceptuales: una etapa supervisada inicial s
 | Modelo base | `google/gemma-3-4b-it` | Versión instruct |
 | Cuantización | 4-bit (Q4) | MLX, group size 64 |
 | Método | LoRA | Solo el adapter se entrena |
-| Layers afectadas | 16 | Default de `mlx_lm.lora` |
-| Iters | 2000 | Iteración 1 (subió de 1000 → 2000) |
+| LoRA layers | 16 | Default de `mlx_lm.lora` |
+| Iters | 2000 | Subió de 1000 → 2000 entre iteraciones |
 | Learning rate | `2e-4` | Default |
-| Batch size | 1 | Limitado por 16 GB RAM |
-| Save every | 200 | Snapshots intermedios |
+| Batch size | 1 | Limitado por 16 GB unified RAM |
+| Save every | 200 | Snapshots intermedios para A/B contra checkpoints |
+| `MAX_TOKEN_LEN` | 2048 | Filtro al armar dataset |
 
-**Resultado actual:** train loss ~2.4, val loss ~2.9 (alto — calidad de respuestas baja). Caminos para mejorar listados en "Estado al cierre de iteración 1".
+**Métricas que aplican en esta etapa (en orden de costo):**
 
-### Etapa 2 — Preference fine-tuning con DPO
+| # | Métrica | Qué mide | Cuándo correr | Status |
+|---|---------|----------|---------------|--------|
+| 1 | **Train loss** | Convergencia durante training | Continuo | ✅ activo (MLX-LM lo loggea) |
+| 2 | **Val loss** | Generalización; señal de overfitting | Cada 200 iters | ✅ activo (default `--save-every`) |
+| 3 | **Perplexity comparativa** | Modelo SFT vs modelo base sobre `test.jsonl` | Después de cada training | ⚠️ heredado de iteración 0 (`eval/perplexity.py`); funciona pero hay que adaptarlo al nuevo formato |
+| 4 | **Style metrics** | Largo, vocabulario, emojis, signos: respuesta generada vs target real | Después de cada training | ⚠️ heredado (`eval/style_metrics.py`); reusable casi sin cambios |
+| 5 | **Smoke test** | Inspección manual de N muestras del test set | Después de cada training | ✅ activo (manual). Documentar en `eval/smoke_<timestamp>.md` cada vez. |
+| 6 | **LLM-as-judge** | Claude/Sonnet puntúa "¿esto suena al usuario?" sobre 100 ejemplos del test | Por cambio de hiperparámetros | ❌ pendiente (ver `OBSERVABILIDAD_EVALS.md`) |
+| 7 | **Test ciego humano** | Panel humano elige cuál es la real entre (real, generada) | Por release | ❌ pendiente |
 
-**Estado:** capturando datos (UI implementada). Reentrenamiento pendiente.
+**Resultados al cierre de iteración 1:**
 
-**Por qué hace falta:** SFT enseña al modelo a imitar tus respuestas pasadas, pero no a diferenciar **qué tipo de respuesta tuya es mejor que otra** en un mismo contexto. Cuando vos elegís 1 de las 3 opciones generadas, le estás dando al modelo una señal nueva: "en este contexto, prefiero esto sobre estas otras dos". Esa señal es lo que se usa para una segunda etapa de entrenamiento llamada **preference fine-tuning**.
+- Train loss final: 2.4
+- Val loss final: 2.9
+- Smoke test: respuestas incoherentes con frecuencia, repetición de tokens del anonimizador, ocasionalmente alucina prefijo de autor.
+
+**Diagnóstico:** loss alto + smoke test pobre indica que **el modelo no convergió bien**. Hipótesis y caminos para mejorar listados en "Estado al cierre de iteración 1" (más adelante).
+
+### Etapa 2 — Deploy + recolección de preferencias
+
+**Status:** implementado.
+
+```bash
+# Mergear LoRA en el modelo base
+bash scripts/merge_mlx.sh
+
+# Exportar a GGUF y registrar en Ollama como "memoria"
+bash scripts/export_gguf.sh
+
+# Levantar el backend
+uvicorn backend.main:app --host 127.0.0.1 --port 8000
+```
+
+**Cómo funciona la recolección:**
+
+- Para cada mensaje que el usuario quiere responder, la UI lanza **3 generaciones en paralelo** con seeds distintos.
+- El usuario elige una de las 3.
+- El backend persiste la elección en `data/feedback/feedback.jsonl` con: `chat_name`, `is_group`, `participants`, `received_message`, `options[3]`, `chosen_idx`, `seeds`, `timestamp`.
+
+**Métricas que aplican en esta etapa:**
+
+| Métrica | Qué mide | Cuándo |
+|---------|----------|--------|
+| **Tasa de elección por opción** | ¿La opción 1 siempre gana? Indicaría sesgo del decoder o seed degenerado | Reportable a partir de ~30 elecciones |
+| **Diversidad inter-opciones** | Distancia (BLEU/embedding) entre las 3 opciones; baja diversidad = fallo del sampling | Continuo |
+| **Tokens / latencia / costo** | Performance operativa | Continuo |
+| **Cobertura por chat** | ¿Hay chats sin elecciones? El DPO posterior va a estar sesgado a los chats activos | Reportable cuando se acumule feedback |
+
+### Etapa 3 — Preference fine-tuning con DPO
+
+**Status:** diseño. Ejecutable cuando se acumulen ~50-100 elecciones.
+
+**Por qué hace falta:** SFT enseña al modelo a imitar respuestas pasadas, pero no a diferenciar **cuál de varias respuestas plausibles es mejor** en un mismo contexto. Cuando el usuario elige 1 de las 3 opciones, le da al modelo una señal nueva: "en este contexto, prefiero esto sobre estas otras dos". Esa señal es lo que se usa para una segunda etapa de entrenamiento llamada **preference fine-tuning**.
 
 **Cómo se va a hacer:**
 
-1. La UI genera 3 opciones de respuesta para cada mensaje recibido y guarda la elección del usuario en `data/feedback/feedback.jsonl` con: `chat_name`, `participants`, `received_message`, `options[3]`, `chosen_idx`, `seeds`.
-2. Cuando se acumulen al menos ~50-100 elecciones, se construyen pares de preferencia `(prompt, chosen, rejected)` — uno por cada combinación de elegida vs descartada (de las 3 opciones, 2 pares de preferencia por elección).
-3. Se aplica **DPO (Direct Preference Optimization)** sobre el modelo SFT actual, entrenando directamente sobre los pares de preferencia. DPO no necesita un reward model intermedio: la función de loss compara directamente la probabilidad que el modelo le asigna a la respuesta elegida vs la rechazada.
-4. El resultado es un modelo que sigue hablando en el estilo del usuario (mantenido por el SFT base) pero ahora con preferencia por **el tipo específico de respuesta** que el usuario eligió consistentemente.
+1. **Construir el dataset de preferencias** (`scripts/build_dpo_dataset.py`, pendiente):
+   Cada elección produce 2 pares de preferencia (la elegida vs cada una de las 2 descartadas):
+   ```json
+   {"prompt": "<chat template formateado>", "chosen": "<respuesta elegida>", "rejected": "<respuesta descartada>"}
+   ```
+2. **Aplicar DPO sobre el modelo SFT actual.** MLX-LM no tiene DPO nativo al momento de este doc; se evalúan dos caminos:
+   - **`trl` (HuggingFace) con `DPOTrainer`**: requiere bajar al modelo no cuantizado en CPU/MPS; más lento en M1 pero la implementación es estándar.
+   - **Implementación manual con `mlx`**: la fórmula de DPO es directa; ~100 líneas de código si se sigue el paper. Más trabajo, pero corre en MLX.
+3. **Output:** `memoria-dpo-lora/` (un nuevo adaptador LoRA encima del SFT, no reemplaza).
 
-**Por qué DPO y no RLHF:** RLHF (Reinforcement Learning from Human Feedback) entrena primero un reward model sobre las preferencias y después aplica PPO sobre el LM con ese reward. Es más complejo, más caro computacionalmente, y más inestable. DPO logra resultados equivalentes con un único entrenamiento estilo SFT, sin reward model intermedio. Para un proyecto personal con preferencias acumuladas en el tiempo, DPO es claramente la opción correcta.
+**Hiperparámetros típicos para DPO:**
+
+| Param | Valor sugerido | Notas |
+|-------|----------------|-------|
+| `beta` | 0.1 | Fuerza con la que el modelo se aleja del SFT base. Más alto = menos drift, más conservador. |
+| Learning rate | `5e-7` a `1e-6` | Mucho más bajo que SFT |
+| Iters | depende del tamaño | Regla práctica: ~3 epochs sobre los pares de preferencia |
+| Reference model | el SFT actual | DPO compara el modelo entrenado vs el de referencia |
+
+**Métricas que aplican en esta etapa:**
+
+| # | Métrica | Qué mide | Cómo se calcula |
+|---|---------|----------|-----------------|
+| 1 | **DPO loss** | Convergencia | log durante training |
+| 2 | **Reward margin** (chosen − rejected) | Cuán "lejos" pone el modelo a la elegida vs la rechazada | Promedio sobre val set de preferencias |
+| 3 | **KL divergence vs SFT base** | Cuánto se alejó del modelo de referencia | Métrica intrínseca de DPO |
+| 4 | **Win rate A/B** | En el eval set fijo, ¿qué porcentaje de respuestas del DPO prefieren los evaluadores sobre las del SFT? | LLM-as-judge o humano sobre N pares (DPO_response, SFT_response) ciegos |
+| 5 | **Drop de calidad de estilo** | ¿El DPO arruinó el estilo aprendido por SFT? | Style metrics post-DPO comparado con post-SFT |
+
+**Por qué DPO y no RLHF:** RLHF entrena primero un reward model sobre las preferencias y después aplica PPO sobre el LM con ese reward. Es más complejo, más caro, y más inestable. DPO logra resultados equivalentes con un único entrenamiento estilo SFT, sin reward model intermedio. Para un proyecto personal con preferencias acumuladas en el tiempo, DPO es la opción correcta.
 
 **Alternativas que se podrían explorar en iteraciones futuras:**
 
 - **KTO (Kahneman-Tversky Optimization):** no requiere pares; alcanza con etiquetas binarias "buena/mala". Útil si se simplifica la UI a 1 opción + thumbs up/down.
 - **IPO (Identity Preference Optimization):** variante de DPO más estable cuando hay ruido en las preferencias.
-- **Online DPO:** reentrenamiento incremental cada N elecciones nuevas, sin necesidad de re-correr todo el dataset desde cero.
+- **Online DPO:** reentrenamiento incremental cada N elecciones nuevas, sin re-correr todo el dataset desde cero.
 
-### Resumen del flujo de entrenamiento
+### Loop de mejora continua
+
+Una vez que existen las dos etapas, el ciclo de mejora se vuelve:
 
 ```
-Chats del usuario
-       │
-       ▼
-parse_whatsapp.py + build_dataset.py
-       │
-       ▼
-SFT con LoRA sobre Gemma 3 4B  ─────►  Modelo "memoria v1" (estilo aprendido)
-       │
-       ▼
-Deploy en Ollama + UI genera 3 opciones por consulta
-       │
-       ▼
-Usuario elige 1 → feedback.jsonl
-       │
-       ▼ (acumular ~50-100 elecciones)
-DPO sobre los pares (chosen, rejected)
-       │
-       ▼
-Modelo "memoria v2" (estilo aprendido + preferencias del usuario)
-       │
-       ▼
-Iteración: deploy → más feedback → DPO incremental
+1. Versión actual del modelo está deployada (ej. memoria-v3)
+2. Usuario interactúa con la UI → genera más feedback
+3. Cada N elecciones nuevas, reentreno DPO sobre el SFT base con TODO el feedback acumulado
+4. Antes de promover el modelo nuevo a "memoria-v(N+1)":
+   - Métricas determinísticas no deberían empeorar (tokens, latencia)
+   - Style metrics no deberían divergir del usuario real
+   - Win rate vs versión anterior > 50% en LLM-as-judge sobre eval set fijo
+   - (eventual) win rate humano > 50%
+5. Si pasa, promover. Si no, descartar y revisar hyperparams o datos.
 ```
+
+**Eval set fijo (importante):** un subset de **100-200 mensajes recibidos reales** congelados al inicio del proyecto, que se usa como benchmark estable para comparar versiones. No debe contaminarse con feedback nuevo (es el "test de regresión" del modelo).
+
+### Vista consolidada — Métricas de evaluación por etapa
+
+| Etapa | Activa hoy | Pendiente |
+|-------|------------|-----------|
+| **0. Datos** | counts del manifest, distribución de tokens | — |
+| **1. SFT** | train loss, val loss, smoke test manual | perplexity comparativa, style metrics, LLM-as-judge, test ciego humano |
+| **2. Recolección** | logs del backend, feedback.jsonl | tasa de elección, diversidad inter-opciones, cobertura por chat, costos/latencia |
+| **3. DPO** | — (todo) | DPO loss, reward margin, KL vs SFT, win rate A/B, drop de style metrics |
+| **Loop** | — | promoción condicionada por métricas, eval set fijo congelado |
+
+El diseño completo de la capa de evals (Langfuse, taxonomía, triangulación, etc.) vive en [OBSERVABILIDAD_EVALS.md](OBSERVABILIDAD_EVALS.md).
 
 ---
 
