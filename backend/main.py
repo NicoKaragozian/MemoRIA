@@ -19,7 +19,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
 from backend.config import (
-    CORS_ORIGINS, MAX_CONCURRENT_STREAMS, MODEL_NAME,
+    AUTHOR_NAME, CORS_ORIGINS, MAX_CONCURRENT_STREAMS, MODEL_NAME,
     OLLAMA_TAGS, OLLAMA_TEMPERATURE, OLLAMA_TIMEOUT, OLLAMA_TOP_P, OLLAMA_URL,
     RATE_LIMIT_GENERATE, RATE_LIMIT_HEALTH,
 )
@@ -75,11 +75,11 @@ _OUTPUT_STOP = re.compile(
     r'|\[Chat:'
     r'|\[CASUAL\]|\[EMAIL-PROF\]|\[ACADÉMICO\]'
     r'|<start_of_turn>|<end_of_turn>|<bos>|<eos>'
-    # Tokens del anonimizador del dataset. El modelo aprendió a generarlos
-    # porque aparecen mucho en los targets de training. Cortamos ahí — la
-    # solución real es reducir la anonimización del dataset y reentrenar
-    # (ver "Caminos para mejorar" en docs/CHATBOT_DESIGN.md).
-    r'|<PER>|<LOC>|<ORG>|<EMAIL>|<URL>|<PHONE>|<HANDLE>|<COORDS>'
+    # Tokens del anonimizador. Después del reentrenamiento sin anonimización
+    # de nombres propios, <PER>/<LOC>/<ORG> ya no deberían aparecer en outputs
+    # — los sacamos. Los tokens de PII real (números, emails, etc.) siguen
+    # presentes en el dataset, así que el modelo todavía puede emitirlos.
+    r'|<EMAIL>|<URL>|<PHONE>|<HANDLE>|<COORDS>'
     r'|<DNI>|<ID>|<CBU>|<IBAN>|<NUM>',
     re.IGNORECASE,
 )
@@ -100,12 +100,18 @@ _HOLD_CHARS = 64
 
 def _make_dynamic_stop(chat_name: str, participants: list[str]) -> Optional[re.Pattern]:
     """
-    Construye un regex que matchea 'Author:' al inicio de línea para cada
-    participante del chat (incluyendo el nombre del chat en grupos).
+    Construye un regex que matchea 'Author:' al inicio de línea para:
+    - cada participante del chat,
+    - el nombre del chat (en grupos puede aparecer como autor de mensajes
+      de sistema mal capturados),
+    - el AUTHOR_NAME del usuario (a veces el modelo aluciona su propio
+      nombre como prefijo, porque en el dataset las respuestas del usuario
+      aparecen identificadas con su nombre en el contexto).
     Si el modelo empieza a generar un turno con prefijo de autor, cortamos
     ahí — significa que se confundió y empezó a alucinar otro mensaje.
     """
-    names = [n.strip() for n in (participants or []) + [chat_name] if n and n.strip()]
+    candidates = (participants or []) + [chat_name, AUTHOR_NAME]
+    names = [n.strip() for n in candidates if n and n.strip()]
     if not names:
         return None
     escaped = sorted({re.escape(n) for n in names}, key=len, reverse=True)
