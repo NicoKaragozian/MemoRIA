@@ -289,6 +289,40 @@ Una vez que existen las dos etapas, el ciclo de mejora se vuelve:
 
 **Eval set fijo (importante):** un subset de **100-200 mensajes recibidos reales** congelados al inicio del proyecto, que se usa como benchmark estable para comparar versiones. No debe contaminarse con feedback nuevo (es el "test de regresión" del modelo).
 
+### Por qué la mejora es exponencial (efecto flywheel)
+
+A diferencia de un modelo entrenado una sola vez, MemoRIA está pensado como un sistema que **mejora con el uso**. Cada vez que el usuario interactúa con la app, genera datos que vuelven al pipeline de entrenamiento. Esto crea un **flywheel** (volante de inercia): la calidad mejora con el tiempo, y la velocidad de mejora se acelera a medida que se acumula uso.
+
+**El loop, expresado como ciclo de retroalimentación positiva:**
+
+```
+más uso → más feedback (1-de-3 elecciones)
+         ↓
+    feedback de mayor calidad
+    (más cobertura por chat, más
+     señal sobre matices del estilo)
+         ↓
+    DPO entrena con preferencias más ricas
+         ↓
+    el modelo responde mejor → más útil de usar
+         ↓
+    más uso ────────────────────────► (loop)
+```
+
+**Por qué es exponencial y no lineal:**
+
+1. **Calidad del modelo → frecuencia de uso.** Si las respuestas son buenas, el usuario va a usar la app más veces (vs. escribir todo a mano cuando no funciona). Más uso = más feedback por unidad de tiempo.
+2. **Volumen de feedback → calidad del DPO.** DPO mejora marginalmente con pocos pares (~50), pero alcanza estabilidad y precisión recién con cientos. La derivada de calidad por par es alta al principio y se estabiliza después.
+3. **Cobertura → modulación por interlocutor.** Cuando el feedback empieza a cubrir distintos chats e interlocutores, el modelo aprende a modular el estilo por contexto. Eso multiplica la utilidad porque cada conversación se vuelve "personalizada" sin esfuerzo extra del usuario.
+4. **Confianza → diversificación de uso.** A medida que el modelo gana fidelidad en chats casuales, el usuario empieza a probarlo en otros contextos (emails, mensajes formales). Eso suma datos en registros nuevos que el SFT inicial no cubría.
+
+**Implicancias prácticas:**
+
+- En las primeras semanas la calidad probablemente sea baja. Hay que **resistir la tentación de juzgarla en estado estacionario** — el sistema está diseñado para mejorar precisamente con uso continuado.
+- El primer reentreno DPO (a las ~50-100 elecciones) es el más impactante. Después la mejora se vuelve incremental.
+- La métrica más importante en el largo plazo no es la calidad de una respuesta individual, sino la **pendiente de mejora**: ¿cada versión es mejor que la anterior por una diferencia consistente?
+- Esto hace que **medir bien sea condición necesaria para que el flywheel funcione**: sin métricas estables (eval set fijo, win rates, etc.) no hay forma de saber si una iteración nueva mejoró o empeoró, y el ciclo deja de cerrar.
+
 ### Vista consolidada — Métricas de evaluación por etapa
 
 | Etapa | Activa hoy | Pendiente |
