@@ -66,6 +66,32 @@ _FORBIDDEN = re.compile(
     re.IGNORECASE,
 )
 
+# Patrones que el modelo puede generar como output cuando no aprendió a parar
+# bien (subentrenamiento). Si aparecen, cortamos la respuesta ahí: el output
+# útil es solo lo que vino antes.
+_OUTPUT_STOP = re.compile(
+    r'\[Tu próximo mensaje:\]'
+    r'|\[Chat con\b'
+    r'|\[Chat:'
+    r'|\[CASUAL\]|\[EMAIL-PROF\]|\[ACADÉMICO\]'
+    r'|<start_of_turn>|<end_of_turn>|<bos>|<eos>',
+    re.IGNORECASE,
+)
+
+# Frases de mensajes de sistema de WhatsApp que el modelo aprendió como noise
+# y a veces emite. Se eliminan del output.
+_OUTPUT_NOISE = re.compile(
+    r'(?:audio|image|video|sticker|GIF|document) omitted'
+    r'|<Multimedia omitido>|imagen omitida|audio omitido|video omitido'
+    r'|sticker omitido|Contact card omitted',
+    re.IGNORECASE,
+)
+
+# Buffer de hold: nunca enviamos al frontend los últimos N caracteres del
+# output, así si están construyendo un patrón stop podemos cortarlos antes
+# de que el cliente los vea. N debe ser >= longitud del patrón más largo.
+_HOLD_CHARS = 32
+
 _stream_semaphore: asyncio.Semaphore | None = None
 
 
@@ -140,10 +166,21 @@ async def generate(req: GenerateRequest, request: Request):
 
     if req.stream:
         async def stream_tokens():
+            full_text = ""    # acumulado de Ollama
+            sent_until = 0    # índice hasta donde ya se envió al frontend
+
+            def emit_clean(slice_text: str) -> str:
+                """Envía al frontend un fragmento limpio de noise."""
+                clean = _OUTPUT_NOISE.sub('', slice_text)
+                return f"data: {json.dumps({'token': clean})}\n\n" if clean else ""
+
             async with _get_semaphore():
                 try:
                     async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
                         async with client.stream("POST", OLLAMA_URL, json=payload) as response:
+                            done_payload = None
+                            stopped_early = False
+
                             async for line in response.aiter_lines():
                                 if not line:
                                     continue
@@ -152,14 +189,53 @@ async def generate(req: GenerateRequest, request: Request):
                                 except json.JSONDecodeError:
                                     logger.warning("Non-JSON line from Ollama: %s", line[:80])
                                     continue
-                                yield f"data: {json.dumps({'token': data.get('response', '')})}\n\n"
-                                if data.get("done"):
-                                    eval_count    = data.get("eval_count", 0)
+
+                                full_text += data.get("response", "")
+
+                                # Si aparece un patrón "stop", cortamos ahí: enviamos
+                                # solo lo previo al patrón y terminamos el stream.
+                                m = _OUTPUT_STOP.search(full_text)
+                                if m:
+                                    full_text = full_text[:m.start()].rstrip()
+                                    new_text = full_text[sent_until:]
+                                    chunk = emit_clean(new_text)
+                                    if chunk:
+                                        yield chunk
+                                    sent_until = len(full_text)
+                                    stopped_early = True
+                                    eval_count = data.get("eval_count", 0)
                                     eval_duration = data.get("eval_duration", 1) or 1
                                     tps = round(eval_count / (eval_duration / 1e9), 1)
                                     yield f"data: {json.dumps({'done': True, 'eval_count': eval_count, 'tokens_per_sec': tps})}\n\n"
                                     yield "data: [DONE]\n\n"
                                     break
+
+                                # Solo enviamos hasta los últimos _HOLD_CHARS
+                                # caracteres del buffer (por si están armando
+                                # un patrón stop incompleto).
+                                safe_until = max(0, len(full_text) - _HOLD_CHARS)
+                                if safe_until > sent_until:
+                                    chunk = emit_clean(full_text[sent_until:safe_until])
+                                    if chunk:
+                                        yield chunk
+                                    sent_until = safe_until
+
+                                if data.get("done"):
+                                    done_payload = data
+                                    break
+
+                            # Si terminó por done normal (no stop), drenamos lo
+                            # que queda en el buffer de hold.
+                            if not stopped_early and done_payload is not None:
+                                tail = full_text[sent_until:]
+                                chunk = emit_clean(tail)
+                                if chunk:
+                                    yield chunk
+                                eval_count = done_payload.get("eval_count", 0)
+                                eval_duration = done_payload.get("eval_duration", 1) or 1
+                                tps = round(eval_count / (eval_duration / 1e9), 1)
+                                yield f"data: {json.dumps({'done': True, 'eval_count': eval_count, 'tokens_per_sec': tps})}\n\n"
+                                yield "data: [DONE]\n\n"
                 except httpx.TimeoutException:
                     logger.exception("Ollama timeout (stream)")
                     yield f"data: {json.dumps({'error': 'upstream_timeout'})}\n\n"
@@ -173,7 +249,14 @@ async def generate(req: GenerateRequest, request: Request):
         async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
             response = await client.post(OLLAMA_URL, json=payload)
             response.raise_for_status()
-            return {"text": response.json().get("response", "")}
+            raw = response.json().get("response", "")
+            # Misma sanitización que el path stream: corte en patrón stop +
+            # eliminación de noise (mensajes de sistema).
+            m = _OUTPUT_STOP.search(raw)
+            if m:
+                raw = raw[:m.start()].rstrip()
+            cleaned = _OUTPUT_NOISE.sub('', raw).strip()
+            return {"text": cleaned}
     except httpx.TimeoutException:
         logger.exception("Ollama timeout (non-stream)")
         raise HTTPException(status_code=504, detail="upstream_timeout")
