@@ -4,7 +4,7 @@ import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Optional
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -90,7 +90,50 @@ _OUTPUT_NOISE = re.compile(
 # Buffer de hold: nunca enviamos al frontend los últimos N caracteres del
 # output, así si están construyendo un patrón stop podemos cortarlos antes
 # de que el cliente los vea. N debe ser >= longitud del patrón más largo.
-_HOLD_CHARS = 32
+_HOLD_CHARS = 64
+
+# Reemplazos cosméticos de tokens del anonimizador. El modelo aprendió a
+# generarlos porque aparecen mucho en el dataset; los pasamos a placeholders
+# legibles en español. La causa raíz (anonimización agresiva del dataset) se
+# ataca reentrenando, no acá.
+_ANON_REPLACEMENTS = {
+    '<PER>':    '[alguien]',
+    '<LOC>':    '[un lugar]',
+    '<ORG>':    '[un lugar]',
+    '<EMAIL>':  '[email]',
+    '<URL>':    '[link]',
+    '<PHONE>':  '[número]',
+    '<HANDLE>': '[@usuario]',
+    '<COORDS>': '[ubicación]',
+    '<DNI>':    '[DNI]',
+    '<ID>':     '[ID]',
+    '<CBU>':    '[cuenta]',
+    '<IBAN>':   '[cuenta]',
+    '<NUM>':    '[número]',
+}
+
+
+def _replace_anon_tokens(text: str) -> str:
+    for token, repl in _ANON_REPLACEMENTS.items():
+        text = text.replace(token, repl)
+    return text
+
+
+def _make_dynamic_stop(chat_name: str, participants: list[str]) -> Optional[re.Pattern]:
+    """
+    Construye un regex que matchea 'Author:' al inicio de línea para cada
+    participante del chat (incluyendo el nombre del chat en grupos).
+    Si el modelo empieza a generar un turno con prefijo de autor, cortamos
+    ahí — significa que se confundió y empezó a alucinar otro mensaje.
+    """
+    names = [n.strip() for n in (participants or []) + [chat_name] if n and n.strip()]
+    if not names:
+        return None
+    escaped = sorted({re.escape(n) for n in names}, key=len, reverse=True)
+    # Match al inicio de una línea (^ con MULTILINE) seguido del nombre y ":"
+    return re.compile(
+        r'(?m)(?:^|\n)\s*(?:' + '|'.join(escaped) + r')\s*:',
+    )
 
 _stream_semaphore: asyncio.Semaphore | None = None
 
@@ -164,15 +207,29 @@ async def generate(req: GenerateRequest, request: Request):
         "options": options,
     }
 
+    # Construir el stop dinámico para este request: el modelo no debería
+    # generar prefijos de autor de los participantes del chat.
+    dynamic_stop = _make_dynamic_stop(req.chat_name, req.participants)
+
+    def find_stop(text: str) -> Optional[re.Match]:
+        """Busca cualquier patrón stop (estático o dinámico) en el texto."""
+        m = _OUTPUT_STOP.search(text)
+        if dynamic_stop is not None:
+            md = dynamic_stop.search(text)
+            if md and (m is None or md.start() < m.start()):
+                m = md
+        return m
+
+    def emit_clean(slice_text: str) -> str:
+        """Aplica filtros de output (noise + reemplazo de tokens del anonimizador)."""
+        clean = _OUTPUT_NOISE.sub('', slice_text)
+        clean = _replace_anon_tokens(clean)
+        return f"data: {json.dumps({'token': clean})}\n\n" if clean else ""
+
     if req.stream:
         async def stream_tokens():
             full_text = ""    # acumulado de Ollama
             sent_until = 0    # índice hasta donde ya se envió al frontend
-
-            def emit_clean(slice_text: str) -> str:
-                """Envía al frontend un fragmento limpio de noise."""
-                clean = _OUTPUT_NOISE.sub('', slice_text)
-                return f"data: {json.dumps({'token': clean})}\n\n" if clean else ""
 
             async with _get_semaphore():
                 try:
@@ -194,7 +251,7 @@ async def generate(req: GenerateRequest, request: Request):
 
                                 # Si aparece un patrón "stop", cortamos ahí: enviamos
                                 # solo lo previo al patrón y terminamos el stream.
-                                m = _OUTPUT_STOP.search(full_text)
+                                m = find_stop(full_text)
                                 if m:
                                     full_text = full_text[:m.start()].rstrip()
                                     new_text = full_text[sent_until:]
@@ -250,12 +307,12 @@ async def generate(req: GenerateRequest, request: Request):
             response = await client.post(OLLAMA_URL, json=payload)
             response.raise_for_status()
             raw = response.json().get("response", "")
-            # Misma sanitización que el path stream: corte en patrón stop +
-            # eliminación de noise (mensajes de sistema).
-            m = _OUTPUT_STOP.search(raw)
+            # Misma sanitización que el path stream.
+            m = find_stop(raw)
             if m:
                 raw = raw[:m.start()].rstrip()
-            cleaned = _OUTPUT_NOISE.sub('', raw).strip()
+            cleaned = _OUTPUT_NOISE.sub('', raw)
+            cleaned = _replace_anon_tokens(cleaned).strip()
             return {"text": cleaned}
     except httpx.TimeoutException:
         logger.exception("Ollama timeout (non-stream)")
