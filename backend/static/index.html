@@ -3,66 +3,121 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>MemoRIA — Asistente de escritura personal</title>
+  <title>MemoRIA — Tu voz en autopilot</title>
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
 
-  <header>
-    <h1>Memo<span>RIA</span></h1>
-    <p>Asistente de escritura personal · Fine-tuned con Gemma 4 E2B</p>
+  <div class="bg-gradient" aria-hidden="true"></div>
+
+  <header class="hero">
+    <div class="brand">
+      <span class="brand-dot"></span>
+      <span class="brand-name">memo<span>RIA</span></span>
+    </div>
+    <h1 class="hero-title">Respondé como vos, sin escribir.</h1>
+    <p class="hero-sub">
+      Pegá una conversación, escribí el último mensaje recibido, y memorIA genera la
+      respuesta que vos hubieras escrito en el estilo de ese chat.
+    </p>
   </header>
 
   <main>
-    <!-- Registro -->
-    <div class="card">
-      <div class="register-group" role="group" aria-label="Registro lingüístico">
-        <button class="register-btn active" data-register="casual" aria-pressed="true">
-          💬 Casual
-        </button>
-        <button class="register-btn" data-register="professional" aria-pressed="false">
-          📧 Email profesional
-        </button>
-        <button class="register-btn" data-register="academic" aria-pressed="false">
-          📝 Académico
-        </button>
+    <!-- Card: input -->
+    <section class="card">
+      <div class="card-header">
+        <h2>Conversación</h2>
+        <span class="status-pill" id="model-pill">cargando…</span>
       </div>
 
-      <textarea
-        id="prompt"
-        placeholder="Escribí tu prompt acá... (Cmd+Enter para generar)"
-        rows="3"
-        aria-label="Prompt"
-      ></textarea>
+      <div class="grid">
+        <label class="field">
+          <span class="field-label">Nombre del chat</span>
+          <input
+            type="text"
+            id="chat-name"
+            placeholder="Ej.: Mamá, Grupo de la facu…"
+            autocomplete="off"
+          />
+        </label>
 
-      <div class="slider-row">
-        <span>Tokens máx.</span>
-        <input type="range" id="max-tokens" min="50" max="1000" value="500" step="50" />
-        <span id="slider-val">500</span>
-        &nbsp;·&nbsp;
-        <span id="token-count">0 / 500</span>
+        <label class="field field-toggle">
+          <span class="field-label">Tipo de chat</span>
+          <div class="toggle-group" role="radiogroup">
+            <button type="button" class="toggle-btn active" data-value="false" role="radio" aria-checked="true">
+              1:1
+            </button>
+            <button type="button" class="toggle-btn" data-value="true" role="radio" aria-checked="false">
+              Grupo
+            </button>
+          </div>
+        </label>
+
+        <label class="field field-full" id="participants-field" hidden>
+          <span class="field-label">Participantes <small class="field-hint">(separados por coma, sin contarte a vos)</small></span>
+          <input
+            type="text"
+            id="participants"
+            placeholder="Ej.: Mechi, Delfi, Luna"
+            autocomplete="off"
+          />
+        </label>
       </div>
 
-      <div class="actions">
-        <button class="btn btn-primary" id="btn-generate">Generar</button>
-        <button class="btn btn-ghost"   id="btn-regenerate">Regenerar</button>
-        <button class="btn btn-ghost"   id="btn-stop" style="display:none">Detener</button>
-      </div>
-    </div>
+      <label class="field field-full" style="margin-top: 1.25rem">
+        <span class="field-label">
+          Mensajes previos
+          <small class="field-hint">— uno por línea, formato <code>Nombre: mensaje</code></small>
+        </span>
+        <textarea
+          id="context"
+          placeholder="Ej.:
+Mechi: cómo va eso?
+Yo: bien todo, vos?
+Mechi: vamos a tomar un café mañana?"
+          rows="9"
+          spellcheck="false"
+        ></textarea>
+        <span class="field-meter" id="context-meter">0 mensajes</span>
+      </label>
 
-    <!-- Output -->
-    <div class="card">
-      <div class="output-header">Respuesta</div>
+      <div class="controls">
+        <label class="slider-field">
+          <span>Tokens máx.</span>
+          <input type="range" id="max-tokens" min="50" max="1000" value="300" step="50" />
+          <span class="slider-val" id="slider-val">300</span>
+        </label>
+
+        <div class="actions">
+          <button class="btn btn-ghost" id="btn-stop" hidden>Detener</button>
+          <button class="btn btn-primary" id="btn-generate">
+            <span>Generar respuesta</span>
+            <kbd>⌘↵</kbd>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Card: output -->
+    <section class="card card-output" id="output-card" hidden>
+      <div class="card-header">
+        <h2>Tu respuesta sugerida</h2>
+        <div class="output-actions">
+          <button class="btn btn-ghost btn-sm" id="btn-regenerate" title="Generar de nuevo con otro seed">↻ Regenerar</button>
+          <button class="btn btn-ghost btn-sm" id="btn-copy" title="Copiar al portapapeles">⧉ Copiar</button>
+        </div>
+      </div>
       <div id="output" aria-live="polite"></div>
-      <div id="status-bar" role="status" aria-live="polite"></div>
-      <div class="actions" style="margin-top:0.75rem">
-        <button class="btn btn-ghost" id="btn-copy">Copiar</button>
+      <div class="output-footer">
+        <span id="status-bar" role="status" aria-live="polite"></span>
+        <span id="token-count"></span>
       </div>
-    </div>
+    </section>
   </main>
 
   <footer>
-    MemoRIA · UdeSA MIA NLP 2026 · Nico Karagozian, Clara Kearney, Valen Pivotto
+    <span>memorIA · UdeSA MIA NLP 2026</span>
+    <span class="footer-team">Nico Karagozian · Clara Kearney · Valen Pivotto</span>
   </footer>
 
   <script src="/static/app.js"></script>

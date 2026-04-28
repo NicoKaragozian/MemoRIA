@@ -1,58 +1,76 @@
 'use strict';
 
-const API_BASE    = '';
-let   currentCtrl = null;
-
 const $ = id => document.getElementById(id);
 
-// ── Registro ────────────────────────────────────────────────────────────────
-const registerBtns = document.querySelectorAll('.register-btn');
-let   activeRegister = 'casual';
+let currentCtrl = null;
+let isGroup     = false;
+let lastPayload = null;   // para regenerar con otro seed
 
-registerBtns.forEach(btn => {
+// ── Toggle 1:1 / Grupo ──────────────────────────────────────────────────────
+document.querySelectorAll('.toggle-btn').forEach(btn => {
   btn.addEventListener('click', () => {
-    registerBtns.forEach(b => {
+    document.querySelectorAll('.toggle-btn').forEach(b => {
       b.classList.remove('active');
-      b.setAttribute('aria-pressed', 'false');
+      b.setAttribute('aria-checked', 'false');
     });
     btn.classList.add('active');
-    btn.setAttribute('aria-pressed', 'true');
-    activeRegister = btn.dataset.register;
+    btn.setAttribute('aria-checked', 'true');
+    isGroup = btn.dataset.value === 'true';
+    $('participants-field').hidden = !isGroup;
   });
 });
 
-// ── Slider ───────────────────────────────────────────────────────────────────
+// ── Slider ──────────────────────────────────────────────────────────────────
 const slider    = $('max-tokens');
 const sliderVal = $('slider-val');
-
 slider.addEventListener('input', () => { sliderVal.textContent = slider.value; });
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Context meter (cuenta líneas con formato Author: text) ──────────────────
+const ctxArea = $('context');
+const ctxMeter = $('context-meter');
+ctxArea.addEventListener('input', updateContextMeter);
+function updateContextMeter() {
+  const lines = parseContext(ctxArea.value);
+  ctxMeter.textContent = `${lines.length} mensaje${lines.length === 1 ? '' : 's'}`;
+}
+
+// ── Parse del contexto: cada línea "Author: text" → {author, text} ──────────
+function parseContext(raw) {
+  if (!raw) return [];
+  const out = [];
+  for (const rawLine of raw.split('\n')) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const idx = line.indexOf(':');
+    if (idx <= 0) continue;
+    const author = line.slice(0, idx).trim();
+    const text   = line.slice(idx + 1).trim();
+    if (!author || !text) continue;
+    out.push({ author, text });
+  }
+  return out;
+}
+
+// ── Status helpers ──────────────────────────────────────────────────────────
 function setStatus(msg, cls = '') {
   const bar = $('status-bar');
   bar.textContent = msg;
   bar.className   = cls;
 }
 
-function setOutputPlaceholder() {
-  const out = $('output');
-  out.textContent = 'La respuesta aparece acá, token por token...';
-  out.classList.add('empty');
+function setLoading(loading) {
+  $('btn-generate').disabled   = loading;
+  $('btn-regenerate').disabled = loading;
+  $('btn-stop').hidden         = !loading;
 }
 
 function clearOutput() {
-  const out = $('output');
-  out.textContent = '';
-  out.classList.remove('empty');
-  $('token-count').textContent = `0 / ${slider.value}`;
+  $('output').textContent  = '';
+  $('token-count').textContent = '';
 }
 
 function appendToken(token) {
   const out = $('output');
-  if (out.classList.contains('empty')) {
-    out.textContent = '';
-    out.classList.remove('empty');
-  }
   out.textContent += token;
   out.scrollTop = out.scrollHeight;
 }
@@ -61,36 +79,61 @@ function updateStats(evalCount, tps) {
   $('token-count').textContent = `${evalCount} tokens · ${tps} tok/s`;
 }
 
-function setLoading(loading) {
-  $('btn-generate').disabled   = loading;
-  $('btn-regenerate').disabled = loading;
-  $('btn-stop').style.display  = loading ? 'inline-block' : 'none';
-}
+// ── Generación ──────────────────────────────────────────────────────────────
+async function generate(seed = null) {
+  const chatName = $('chat-name').value.trim();
+  const context  = parseContext(ctxArea.value);
 
-// ── Generar ──────────────────────────────────────────────────────────────────
-async function generate(prompt, seed = null) {
-  if (!prompt.trim()) {
-    setStatus('Escribí un prompt antes de generar.', 'error');
+  // Validaciones
+  if (!chatName) {
+    setStatus('Falta el nombre del chat.', 'error');
+    $('chat-name').focus();
     return;
   }
+  if (context.length === 0) {
+    setStatus('Pegá al menos un mensaje en formato "Nombre: texto".', 'error');
+    ctxArea.focus();
+    return;
+  }
+
+  let participants = [];
+  if (isGroup) {
+    const raw = $('participants').value.trim();
+    if (raw) {
+      participants = raw.split(',').map(s => s.trim()).filter(Boolean);
+    } else {
+      // Si no se completó, derivamos de los autores del contexto
+      participants = [...new Set(context.map(m => m.author))];
+    }
+  } else {
+    // En 1:1 el participante es la otra persona; tomamos el primer autor distinto del usuario
+    participants = [chatName];
+  }
+
+  // Mostrar la card de output recién al primer generate
+  $('output-card').hidden = false;
 
   if (currentCtrl) currentCtrl.abort();
   currentCtrl = new AbortController();
 
   clearOutput();
   setLoading(true);
-  setStatus('Conectando...', '');
+  setStatus('Conectando…', '');
 
   const body = {
-    prompt,
-    register:   activeRegister,
-    stream:     true,
-    max_tokens: parseInt(slider.value, 10),
+    chat_name:    chatName,
+    is_group:     isGroup,
+    participants,
+    context,
+    stream:       true,
+    max_tokens:   parseInt(slider.value, 10),
   };
   if (seed !== null) body.seed = seed;
 
+  lastPayload = body;
+
   try {
-    const res = await fetch(`${API_BASE}/generate`, {
+    const res = await fetch('/generate', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify(body),
@@ -102,7 +145,7 @@ async function generate(prompt, seed = null) {
       throw new Error(err.detail || `HTTP ${res.status}`);
     }
 
-    setStatus('Generando...', '');
+    setStatus('Generando…', '');
     const reader  = res.body.getReader();
     const decoder = new TextDecoder();
     let   buffer  = '';
@@ -138,14 +181,10 @@ async function generate(prompt, seed = null) {
       }
     }
 
-    if (!done || $('output').classList.contains('empty')) {
-      setStatus('✓ Listo', 'ok');
-    } else {
-      setStatus('✓ Listo', 'ok');
-    }
+    setStatus('Listo ✓', 'ok');
   } catch (err) {
     if (err.name === 'AbortError') {
-      setStatus('Generación cancelada.', '');
+      setStatus('Generación cancelada', '');
     } else {
       setStatus(`Error: ${err.message}`, 'error');
     }
@@ -155,14 +194,12 @@ async function generate(prompt, seed = null) {
   }
 }
 
-// ── Eventos ──────────────────────────────────────────────────────────────────
-$('btn-generate').addEventListener('click', () => {
-  generate($('prompt').value);
-});
+// ── Eventos ─────────────────────────────────────────────────────────────────
+$('btn-generate').addEventListener('click', () => generate());
 
 $('btn-regenerate').addEventListener('click', () => {
-  const prompt = $('prompt').value;
-  if (prompt.trim()) generate(prompt, Math.floor(Math.random() * 2147483647));
+  if (!lastPayload) return;
+  generate(Math.floor(Math.random() * 2147483647));
 });
 
 $('btn-stop').addEventListener('click', () => {
@@ -171,33 +208,42 @@ $('btn-stop').addEventListener('click', () => {
 
 $('btn-copy').addEventListener('click', async () => {
   const text = $('output').textContent;
-  if (!text || $('output').classList.contains('empty')) return;
+  if (!text) return;
   await navigator.clipboard.writeText(text);
   setStatus('Copiado al portapapeles ✓', 'ok');
-  setTimeout(() => setStatus('', ''), 2000);
+  setTimeout(() => setStatus('Listo ✓', 'ok'), 1500);
 });
 
-$('prompt').addEventListener('keydown', e => {
+// Cmd/Ctrl+Enter para generar desde cualquier campo
+document.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
     e.preventDefault();
-    generate($('prompt').value);
+    generate();
   }
 });
 
-// ── Init ─────────────────────────────────────────────────────────────────────
-setOutputPlaceholder();
+// ── Init ────────────────────────────────────────────────────────────────────
 sliderVal.textContent = slider.value;
+updateContextMeter();
 
-fetch(`${API_BASE}/health`)
+fetch('/health')
   .then(r => r.json())
   .then(data => {
+    const pill = $('model-pill');
     if (data.status === 'ok') {
       const model = data.models.find(m => m.includes('memoria')) || data.models[0];
-      setStatus(`Modelo: ${model || 'memoria'} ✓`, 'ok');
+      pill.textContent = model;
+      pill.className = 'status-pill ok';
     } else if (data.status === 'degraded') {
-      setStatus('⚠ Modelo no cargado — corré create_ollama_model.sh primero', 'error');
+      pill.textContent = 'modelo no cargado';
+      pill.className = 'status-pill error';
     } else {
-      setStatus('⚠ Ollama no disponible — asegurate de que el modelo esté cargado', 'error');
+      pill.textContent = 'sin conexión';
+      pill.className = 'status-pill error';
     }
   })
-  .catch(() => setStatus('⚠ No se puede conectar al backend', 'error'));
+  .catch(() => {
+    const pill = $('model-pill');
+    pill.textContent = 'sin conexión';
+    pill.className = 'status-pill error';
+  });
