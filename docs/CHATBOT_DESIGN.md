@@ -71,6 +71,89 @@ Persona2: gracias amor
 
 ---
 
+## Pipeline de entrenamiento
+
+El modelo se entrena en dos etapas conceptuales: una etapa supervisada inicial sobre los chats del usuario, y una etapa posterior de aprendizaje por preferencias sobre el feedback que el usuario va generando al usar la app.
+
+### Etapa 1 — Supervised Fine-Tuning (SFT)
+
+**Estado:** implementado en esta iteración.
+
+**Qué es:** entrenamiento supervisado clásico, donde el modelo aprende a maximizar la probabilidad de la respuesta real del usuario dado el contexto. El "ground truth" es lo que el usuario efectivamente escribió en su chat.
+
+**Cómo funciona:**
+
+1. El parser construye pares `(contexto, respuesta_real_del_usuario)` a partir de los chats de WhatsApp.
+2. `build_dataset.py` los formatea con el chat template de Gemma 3:
+   - `user`: header del chat + contexto de los últimos N mensajes
+   - `assistant`: el turno real del usuario (target)
+3. Se entrena con **MLX-LM LoRA** sobre Gemma 3 4B cuantizado a 4-bit (Apple Silicon).
+
+**Hiperparámetros usados en esta iteración:**
+
+| Param | Valor | Notas |
+|-------|-------|-------|
+| Modelo base | `google/gemma-3-4b-it` | Versión instruct |
+| Cuantización | 4-bit (Q4) | MLX, group size 64 |
+| Método | LoRA | Solo el adapter se entrena |
+| Layers afectadas | 16 | Default de `mlx_lm.lora` |
+| Iters | 2000 | Iteración 1 (subió de 1000 → 2000) |
+| Learning rate | `2e-4` | Default |
+| Batch size | 1 | Limitado por 16 GB RAM |
+| Save every | 200 | Snapshots intermedios |
+
+**Resultado actual:** train loss ~2.4, val loss ~2.9 (alto — calidad de respuestas baja). Caminos para mejorar listados en "Estado al cierre de iteración 1".
+
+### Etapa 2 — Preference fine-tuning con DPO
+
+**Estado:** capturando datos (UI implementada). Reentrenamiento pendiente.
+
+**Por qué hace falta:** SFT enseña al modelo a imitar tus respuestas pasadas, pero no a diferenciar **qué tipo de respuesta tuya es mejor que otra** en un mismo contexto. Cuando vos elegís 1 de las 3 opciones generadas, le estás dando al modelo una señal nueva: "en este contexto, prefiero esto sobre estas otras dos". Esa señal es lo que se usa para una segunda etapa de entrenamiento llamada **preference fine-tuning**.
+
+**Cómo se va a hacer:**
+
+1. La UI genera 3 opciones de respuesta para cada mensaje recibido y guarda la elección del usuario en `data/feedback/feedback.jsonl` con: `chat_name`, `participants`, `received_message`, `options[3]`, `chosen_idx`, `seeds`.
+2. Cuando se acumulen al menos ~50-100 elecciones, se construyen pares de preferencia `(prompt, chosen, rejected)` — uno por cada combinación de elegida vs descartada (de las 3 opciones, 2 pares de preferencia por elección).
+3. Se aplica **DPO (Direct Preference Optimization)** sobre el modelo SFT actual, entrenando directamente sobre los pares de preferencia. DPO no necesita un reward model intermedio: la función de loss compara directamente la probabilidad que el modelo le asigna a la respuesta elegida vs la rechazada.
+4. El resultado es un modelo que sigue hablando en el estilo del usuario (mantenido por el SFT base) pero ahora con preferencia por **el tipo específico de respuesta** que el usuario eligió consistentemente.
+
+**Por qué DPO y no RLHF:** RLHF (Reinforcement Learning from Human Feedback) entrena primero un reward model sobre las preferencias y después aplica PPO sobre el LM con ese reward. Es más complejo, más caro computacionalmente, y más inestable. DPO logra resultados equivalentes con un único entrenamiento estilo SFT, sin reward model intermedio. Para un proyecto personal con preferencias acumuladas en el tiempo, DPO es claramente la opción correcta.
+
+**Alternativas que se podrían explorar en iteraciones futuras:**
+
+- **KTO (Kahneman-Tversky Optimization):** no requiere pares; alcanza con etiquetas binarias "buena/mala". Útil si se simplifica la UI a 1 opción + thumbs up/down.
+- **IPO (Identity Preference Optimization):** variante de DPO más estable cuando hay ruido en las preferencias.
+- **Online DPO:** reentrenamiento incremental cada N elecciones nuevas, sin necesidad de re-correr todo el dataset desde cero.
+
+### Resumen del flujo de entrenamiento
+
+```
+Chats del usuario
+       │
+       ▼
+parse_whatsapp.py + build_dataset.py
+       │
+       ▼
+SFT con LoRA sobre Gemma 3 4B  ─────►  Modelo "memoria v1" (estilo aprendido)
+       │
+       ▼
+Deploy en Ollama + UI genera 3 opciones por consulta
+       │
+       ▼
+Usuario elige 1 → feedback.jsonl
+       │
+       ▼ (acumular ~50-100 elecciones)
+DPO sobre los pares (chosen, rejected)
+       │
+       ▼
+Modelo "memoria v2" (estilo aprendido + preferencias del usuario)
+       │
+       ▼
+Iteración: deploy → más feedback → DPO incremental
+```
+
+---
+
 ## Parámetros (parametrizables vía `.env`)
 
 | Parámetro | Default | Descripción |
