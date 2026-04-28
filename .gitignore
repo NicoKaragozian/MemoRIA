@@ -6,6 +6,7 @@ MEMORIA_PLAN.md
 data/raw/
 data/processed/
 data/dataset/
+data/feedback/
 
 # Exports de WhatsApp por si quedan fuera de data/raw/
 WhatsApp*/

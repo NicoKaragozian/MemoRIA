@@ -17,100 +17,79 @@
     </div>
     <h1 class="hero-title">Respondé como vos, sin escribir.</h1>
     <p class="hero-sub">
-      Pegá una conversación, escribí el último mensaje recibido, y memorIA genera la
-      respuesta que vos hubieras escrito en el estilo de ese chat.
+      Pegá un mensaje que te llegó, elegí en qué chat lo recibirías, y memorIA te
+      sugiere <strong>tres respuestas</strong> en tu estilo. La que elijas se guarda
+      como ejemplo para que el modelo aprenda a sonarte cada vez más.
     </p>
   </header>
 
   <main>
-    <!-- Card: input -->
+
+    <!-- Step 1 + 2: contexto del mensaje -->
     <section class="card">
       <div class="card-header">
-        <h2>Conversación</h2>
+        <h2><span class="step-num">1</span> ¿En qué chat lo estás respondiendo?</h2>
         <span class="status-pill" id="model-pill">cargando…</span>
       </div>
 
       <div class="grid">
-        <label class="field">
-          <span class="field-label">Nombre del chat</span>
-          <input
-            type="text"
-            id="chat-name"
-            placeholder="Ej.: Mamá, Grupo de la facu…"
-            autocomplete="off"
-          />
-        </label>
-
-        <label class="field field-toggle">
-          <span class="field-label">Tipo de chat</span>
-          <div class="toggle-group" role="radiogroup">
-            <button type="button" class="toggle-btn active" data-value="false" role="radio" aria-checked="true">
-              1:1
-            </button>
-            <button type="button" class="toggle-btn" data-value="true" role="radio" aria-checked="false">
-              Grupo
-            </button>
-          </div>
-        </label>
-
-        <label class="field field-full" id="participants-field" hidden>
-          <span class="field-label">Participantes <small class="field-hint">(separados por coma, sin contarte a vos)</small></span>
-          <input
-            type="text"
-            id="participants"
-            placeholder="Ej.: Mechi, Delfi, Luna"
-            autocomplete="off"
-          />
+        <label class="field field-full">
+          <span class="field-label">Chat</span>
+          <select id="chat-select">
+            <option value="" disabled selected>Cargando chats…</option>
+          </select>
+          <span class="field-meta" id="chat-meta"></span>
         </label>
       </div>
 
-      <label class="field field-full" style="margin-top: 1.25rem">
-        <span class="field-label">
-          Mensajes previos
-          <small class="field-hint">— uno por línea, formato <code>Nombre: mensaje</code></small>
-        </span>
+      <div class="card-divider"></div>
+
+      <div class="step-row">
+        <h2><span class="step-num">2</span> ¿Qué mensaje te llegó?</h2>
+      </div>
+
+      <label class="field field-full">
         <textarea
-          id="context"
-          placeholder="Ej.:
-Mechi: cómo va eso?
-Yo: bien todo, vos?
-Mechi: vamos a tomar un café mañana?"
-          rows="9"
+          id="received-message"
+          placeholder="Pegá acá el mensaje que recibiste"
+          rows="4"
           spellcheck="false"
         ></textarea>
-        <span class="field-meter" id="context-meter">0 mensajes</span>
+        <span class="field-help">Escribís el mensaje tal cual te llegó. Si querés sumar más contexto previo, podés agregar líneas con formato <code>Nombre: texto</code>.</span>
       </label>
 
       <div class="controls">
         <label class="slider-field">
           <span>Tokens máx.</span>
-          <input type="range" id="max-tokens" min="50" max="1000" value="300" step="50" />
-          <span class="slider-val" id="slider-val">300</span>
+          <input type="range" id="max-tokens" min="50" max="500" value="120" step="10" />
+          <span class="slider-val" id="slider-val">120</span>
         </label>
 
         <div class="actions">
           <button class="btn btn-ghost" id="btn-stop" hidden>Detener</button>
           <button class="btn btn-primary" id="btn-generate">
-            <span>Generar respuesta</span>
+            <span>Generar 3 opciones</span>
             <kbd>⌘↵</kbd>
           </button>
         </div>
       </div>
     </section>
 
-    <!-- Card: output -->
+    <!-- Step 3: opciones -->
     <section class="card card-output" id="output-card" hidden>
       <div class="card-header">
-        <h2>Tu respuesta sugerida</h2>
-        <div class="output-actions">
-          <button class="btn btn-ghost btn-sm" id="btn-regenerate" title="Generar de nuevo con otro seed">↻ Regenerar</button>
-          <button class="btn btn-ghost btn-sm" id="btn-copy" title="Copiar al portapapeles">⧉ Copiar</button>
-        </div>
+        <h2><span class="step-num">3</span> Elegí cuál hubieras respondido vos</h2>
       </div>
-      <div id="output" aria-live="polite"></div>
+      <p class="card-help" id="output-help">
+        Las tres opciones se generan en paralelo. Cuando elijas una, se guarda
+        para que el modelo aprenda tu preferencia.
+      </p>
+
+      <div class="options-grid" id="options-grid"></div>
+
       <div class="output-footer">
         <span id="status-bar" role="status" aria-live="polite"></span>
-        <span id="token-count"></span>
+        <button class="btn btn-ghost btn-sm" id="btn-regenerate" hidden>↻ Generar otras 3</button>
       </div>
     </section>
   </main>

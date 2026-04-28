@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
 
@@ -23,6 +24,10 @@ from backend.config import (
     RATE_LIMIT_GENERATE, RATE_LIMIT_HEALTH,
 )
 from scripts.build_dataset import _format_user_prompt
+
+PAIRS_FILE    = Path("data/processed/whatsapp_pairs.jsonl")
+FEEDBACK_DIR  = Path("data/feedback")
+FEEDBACK_FILE = FEEDBACK_DIR / "feedback.jsonl"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("memoria")
@@ -175,6 +180,59 @@ async def generate(req: GenerateRequest, request: Request):
     except Exception:
         logger.exception("Non-stream generate error")
         raise HTTPException(status_code=500, detail="internal")
+
+
+@app.get("/chats")
+async def list_chats():
+    """Devuelve la lista de chats parseados disponibles para usar en la UI."""
+    if not PAIRS_FILE.exists():
+        return {"chats": [], "reason": "no_pairs_file"}
+    seen: dict[str, dict] = {}
+    with open(PAIRS_FILE, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                pair = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            name = pair.get("chat_name")
+            if not name or name in seen:
+                continue
+            seen[name] = {
+                "chat_name":    name,
+                "is_group":     bool(pair.get("is_group")),
+                "participants": pair.get("participants", []),
+            }
+    chats = sorted(seen.values(), key=lambda c: (c["is_group"], c["chat_name"].lower()))
+    return {"chats": chats}
+
+
+class FeedbackRequest(BaseModel):
+    chat_name:        Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+    is_group:         bool
+    participants:     list[Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]] = Field(default_factory=list)
+    received_message: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4000)]
+    options:          list[Annotated[str, StringConstraints(strip_whitespace=True, min_length=0, max_length=4000)]]
+    chosen_idx:       int = Field(ge=0)
+    seeds:            list[int] = Field(default_factory=list)
+
+
+@app.post("/feedback")
+async def save_feedback(req: FeedbackRequest):
+    """Guarda el feedback (qué opción eligió el usuario) para reentrenamiento futuro."""
+    if req.chosen_idx >= len(req.options):
+        raise HTTPException(status_code=400, detail="chosen_idx fuera de rango")
+
+    FEEDBACK_DIR.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        **req.model_dump(),
+    }
+    with open(FEEDBACK_FILE, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    return {"ok": True, "saved_to": str(FEEDBACK_FILE)}
 
 
 @app.get("/health")
