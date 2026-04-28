@@ -43,9 +43,10 @@ function renderChatMeta() {
   }
 
   if (activeChat.is_group) {
-    const n = activeChat.participants.length;
+    // Tamaño total del grupo = participantes + el usuario
+    const total = activeChat.participants.length + 1;
     const list = activeChat.participants.join(', ');
-    meta.textContent = `Grupo de ${n} ${n === 1 ? 'persona' : 'personas'}: ${list}`;
+    meta.textContent = `Grupo de ${total} personas — los demás son: ${list}`;
 
     // Mostrar dropdown de remitente con los participantes del grupo
     let opts = '<option value="" disabled selected>Elegí del grupo…</option>';
@@ -87,8 +88,9 @@ async function loadChats() {
     if (groups.length) {
       html += '<optgroup label="Grupos">';
       for (const c of groups) {
-        const n = c.participants.length;
-        html += `<option value="${escapeHtml(c.chat_name)}">${escapeHtml(c.chat_name)} (${n} pers.)</option>`;
+        // Tamaño total del grupo = participantes + el usuario
+        const total = c.participants.length + 1;
+        html += `<option value="${escapeHtml(c.chat_name)}">${escapeHtml(c.chat_name)} (${total} pers.)</option>`;
       }
       html += '</optgroup>';
     }
