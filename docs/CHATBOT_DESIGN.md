@@ -50,19 +50,19 @@ Cada turno del usuario que **no sea el primero** de una conversación genera un 
 - Descartar el primer turno de cada conversación (no tiene mensaje recibido).
 
 ### Estilo por interlocutor
-El modelo recibe el `chat_name` en el input (ej. `"Mechi Muino"`, `"International girlies"`). Esto le permite modular el estilo según con quién/dónde está hablando.
+El modelo recibe el `chat_name` en el input (ej. el nombre del contacto o el nombre del grupo). Esto le permite modular el estilo según con quién/dónde está hablando.
 
 ### Formato del input al modelo (chat template)
 
 ```
-[Chat: International girlies (con Delfi y Luna)]
+[Chat: NombreGrupo (con Persona1 y Persona2)]
 
-Delfi: hoy comí lo más rico
-Luna: pasa la receta!!
-Delfi: te paso por insta
+Persona1: hoy comí lo más rico
+Persona2: pasa la receta!!
+Persona1: te paso por insta
 [Usuario]: yo tmb quiero
-Delfi: les paso a las dos
-Luna: gracias amor
+Persona1: les paso a las dos
+Persona2: gracias amor
 
 [Tu próximo mensaje:]
 ```
@@ -83,14 +83,14 @@ Luna: gracias amor
 
 ## Estimación de volumen
 
-Estimación basada en los chats actuales del usuario que está entrenando ahora (`AUTHOR_NAME=Clara Kearney`). Los volúmenes van a variar para cada usuario según sus propios chats.
+Estimación basada en los chats del usuario que está entrenando en esta iteración. Los nombres de chats se anonimizan en este documento; los volúmenes son los reales. Los volúmenes van a variar para cada usuario según sus propios chats.
 
 | Chat | Tipo | Mensajes del usuario | Pares estimados |
 |------|------|----------------------|-----------------|
-| International girlies | Grupo (3 personas) | 2527 | ~1500 |
-| TFEC BK | Grupo | 2118 | ~1300 |
-| Maestria IA mesa chica | Grupo | 387 | ~200 |
-| Mechi Muino | 1:1 | 307 | ~180 |
+| Grupo A | Grupo (3 personas) | 2527 | ~1500 |
+| Grupo B | Grupo (4 personas) | 2118 | ~1300 |
+| Grupo C | Grupo (6 personas) | 387 | ~200 |
+| Contacto A | 1:1 | 307 | ~180 |
 | **Total** | | **5339** | **~3200** |
 
 ---
@@ -123,10 +123,10 @@ Pipeline end-to-end completo desde chats `.txt` hasta modelo entrenado:
 
 | Chat | Pares |
 |------|-------|
-| TFEC BK | 1539 |
-| International girlies | 511 |
-| Maestria IA mesa chica | 273 |
-| Mechi Muino | 197 |
+| Grupo B (4 personas) | 1539 |
+| Grupo A (3 personas) | 511 |
+| Grupo C (6 personas) | 273 |
+| Contacto A (1:1) | 197 |
 | **Total parseado** | **2520** |
 | Post-dedup | 2509 |
 | Descartados por > MAX_TOKEN_LEN | 2 |

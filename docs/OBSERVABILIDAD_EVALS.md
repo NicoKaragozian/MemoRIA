@@ -47,7 +47,7 @@ Output: `docs/taxonomy_v1.yml` con dimensiones definidas por el usuario en sus p
 - **Léxico**: palabras propias (`"divinoo"`, `"joya"`, `"dale re"`) y palabras que **no** se usan.
 - **Apertura**: contar más, contar menos, devolver pregunta.
 - **Humor**: irónico, autodesburlado, juegos de palabras, ninguno.
-- **Modulación por interlocutor**: ¿el "yo con Mechi" es distinto del "yo con mi jefe"?
+- **Modulación por interlocutor**: ¿el "yo con un amigo cercano" es distinto del "yo con mi jefe"?
 
 ### Versionado
 
@@ -102,11 +102,11 @@ Antes de evaluar una respuesta, el usuario anota "creo que esto es un X de 5". D
   "trace_id": "uuid",
   "session_id": "uuid_conversacion",   // mismo para toda una conversación
   "timestamp": "iso8601",
-  "user_id": "Clara Kearney",          // del .env (AUTHOR_NAME)
+  "user_id": "<AUTHOR_NAME>",          // del .env
 
   "input": {
     "user_message": "...",
-    "chat_name": "Mechi Muino",
+    "chat_name": "<nombre del chat o grupo>",
     "is_group": false,
     "conversation_history": [{"author": "...", "text": "..."}]
   },
