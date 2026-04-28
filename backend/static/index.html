@@ -45,10 +45,18 @@
       <div class="card-divider"></div>
 
       <div class="step-row">
-        <h2><span class="step-num">2</span> ¿Qué mensaje te llegó?</h2>
+        <h2><span class="step-num">2</span> <span id="step-2-title">¿Qué mensaje te llegó?</span></h2>
       </div>
 
-      <label class="field field-full">
+      <label class="field field-full" id="sender-field" hidden>
+        <span class="field-label">¿Quién te lo envió?</span>
+        <select id="sender-select">
+          <option value="" disabled selected>Elegí del grupo…</option>
+        </select>
+        <span class="field-help">En un grupo, a veces respondés distinto según quién pregunta. Esto se incluye como contexto del modelo.</span>
+      </label>
+
+      <label class="field field-full" style="margin-top: 1rem">
         <textarea
           id="received-message"
           placeholder="Pegá acá el mensaje que recibiste"

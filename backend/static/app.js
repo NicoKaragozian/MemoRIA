@@ -31,13 +31,34 @@ function setLoading(loading) {
 // ── Chat selector ──────────────────────────────────────────────────────────
 function renderChatMeta() {
   const meta = $('chat-meta');
-  if (!activeChat) { meta.textContent = ''; return; }
+  const senderField = $('sender-field');
+  const senderSelect = $('sender-select');
+  const step2Title = $('step-2-title');
+
+  if (!activeChat) {
+    meta.textContent = '';
+    senderField.hidden = true;
+    step2Title.textContent = '¿Qué mensaje te llegó?';
+    return;
+  }
+
   if (activeChat.is_group) {
     const n = activeChat.participants.length;
     const list = activeChat.participants.join(', ');
     meta.textContent = `Grupo de ${n} ${n === 1 ? 'persona' : 'personas'}: ${list}`;
+
+    // Mostrar dropdown de remitente con los participantes del grupo
+    let opts = '<option value="" disabled selected>Elegí del grupo…</option>';
+    for (const p of activeChat.participants) {
+      opts += `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`;
+    }
+    senderSelect.innerHTML = opts;
+    senderField.hidden = false;
+    step2Title.textContent = '¿Qué mensaje te llegó?';
   } else {
     meta.textContent = `Conversación 1:1 con ${activeChat.chat_name}`;
+    senderField.hidden = true;
+    step2Title.textContent = `¿Qué te dijo ${activeChat.chat_name}?`;
   }
 }
 
@@ -86,13 +107,14 @@ $('chat-select').addEventListener('change', e => {
 
 // ── Parse del input: si es 1 línea, es un solo mensaje del interlocutor.
 //    Si tiene varias líneas con "Author: text", se respeta el formato. ─────
-function buildContextFromInput(received, chat) {
+function buildContextFromInput(received, chat, sender) {
   const lines = received.split('\n').map(l => l.trim()).filter(Boolean);
-  // Si solo hay una línea sin ":" o si el ":" está en posición rara, asumimos
-  // que es un mensaje único del interlocutor.
-  const interlocutor = chat.is_group ? null : chat.chat_name;
+
+  // En 1:1 el remitente es siempre la otra persona; en grupo el usuario lo eligió.
+  const defaultAuthor = chat.is_group ? sender : chat.chat_name;
 
   // Si hay alguna línea con formato "Author: text", parseamos como contexto estructurado
+  // (caso power user que quiere pegar varios mensajes con autores explícitos).
   const hasStructuredFormat = lines.some(l => {
     const idx = l.indexOf(':');
     return idx > 0 && idx < 50 && l.slice(idx + 1).trim().length > 0;
@@ -111,11 +133,8 @@ function buildContextFromInput(received, chat) {
     return out;
   }
 
-  // Caso simple: cada línea es un mensaje del interlocutor (o "alguien" si es grupo)
-  return lines.map(text => ({
-    author: interlocutor || 'Alguien',
-    text,
-  }));
+  // Caso simple: cada línea es un mensaje del remitente identificado.
+  return lines.map(text => ({ author: defaultAuthor, text }));
 }
 
 // ── Generación de las 3 opciones en paralelo ───────────────────────────────
@@ -209,6 +228,17 @@ async function generateThree() {
     $('chat-select').focus();
     return;
   }
+
+  let sender = null;
+  if (activeChat.is_group) {
+    sender = $('sender-select').value;
+    if (!sender) {
+      setStatus('Elegí quién te envió el mensaje.', 'error');
+      $('sender-select').focus();
+      return;
+    }
+  }
+
   const received = $('received-message').value.trim();
   if (!received) {
     setStatus('Pegá el mensaje que te llegó.', 'error');
@@ -216,7 +246,7 @@ async function generateThree() {
     return;
   }
 
-  const context = buildContextFromInput(received, activeChat);
+  const context = buildContextFromInput(received, activeChat, sender);
   if (context.length === 0) {
     setStatus('No pude leer el mensaje recibido.', 'error');
     return;
