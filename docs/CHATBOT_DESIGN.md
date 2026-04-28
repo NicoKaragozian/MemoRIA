@@ -226,6 +226,41 @@ uvicorn backend.main:app --host 127.0.0.1 --port 8000
 | **Tokens / latencia / costo** | Performance operativa | Continuo |
 | **Cobertura por chat** | ¿Hay chats sin elecciones? El DPO posterior va a estar sesgado a los chats activos | Reportable cuando se acumule feedback |
 
+#### Mejora planeada — 4ta opción: respuesta libre del usuario
+
+**Status:** diseño. Implementación pendiente.
+
+**Por qué:** cuando el usuario elige 1 de las 3 opciones generadas, a veces lo que está pasando es que elige *la menos mala* — no necesariamente la que de verdad le gusta. Esa ambigüedad debilita la señal del feedback. Cuando ninguna de las 3 es lo suficientemente buena, hoy el usuario simplemente abandona la app y escribe la respuesta a mano en WhatsApp — y ese dato (lo que efectivamente escribió) se pierde.
+
+**Cómo va a funcionar:** además de las 3 opciones generadas, la UI incluirá una 4ta card con un textarea editable: *"Ninguna me convence — escribí lo que vas a responder vos"*. Cuando el usuario escribe ahí y guarda, el feedback persiste con un campo nuevo `user_wrote` y `chosen_idx = -1` (sentinel para "respuesta libre").
+
+**Estructura del feedback con esta extensión:**
+
+```jsonc
+{
+  "timestamp": "...",
+  "chat_name": "...",
+  "is_group": ...,
+  "participants": [...],
+  "received_message": "...",
+  "options": ["op1", "op2", "op3"],
+  "chosen_idx": -1,            // -1 = el usuario escribió la propia
+  "user_wrote": "lo que efectivamente escribió",
+  "seeds": [...]
+}
+```
+
+**Doble aprovechamiento en el pipeline de entrenamiento:** la respuesta libre del usuario se usa **a la vez** de dos maneras, sin tener que elegir:
+
+| Uso | Construcción del ejemplo | Para qué |
+|-----|-------------------------|----------|
+| **Ejemplo SFT extra** | `(contexto, user_wrote)` se suma al dataset SFT en próxima iteración | El modelo aprende un nuevo caso de ground truth — exactamente lo que el usuario hubiera escrito en ese contexto |
+| **3 pares DPO** | `(contexto, chosen=user_wrote, rejected=options[i])` para cada `i ∈ {0,1,2}` | Señal de preferencia muy fuerte: "preferí mi propia respuesta sobre TODAS las que generaste" |
+
+**Por qué importa para el flywheel:** mientras el modelo está poco maduro (etapa actual), las 3 opciones generadas son ruidosas y la señal "elegí la 2" es ambigua. La 4ta opción captura **datos limpios desde el día 1**: lo que el usuario realmente quería escribir. Eso le da al primer DPO mucho más con qué morder y acelera la curva de mejora exponencial.
+
+**Costo de fricción:** cero. El caso "ninguna me sirvió" es exactamente cuando el usuario ya iba a escribir manualmente en WhatsApp. La diferencia con la versión actual es que ahora ese trabajo se captura como dato de entrenamiento en vez de perderse.
+
 ### Etapa 3 — Preference fine-tuning con DPO
 
 **Status:** diseño. Ejecutable cuando se acumulen ~50-100 elecciones.
@@ -235,9 +270,13 @@ uvicorn backend.main:app --host 127.0.0.1 --port 8000
 **Cómo se va a hacer:**
 
 1. **Construir el dataset de preferencias** (`scripts/build_dpo_dataset.py`, pendiente):
-   Cada elección produce 2 pares de preferencia (la elegida vs cada una de las 2 descartadas):
+   Cada entrada de feedback produce pares de preferencia distintos según el caso:
+   - Si `chosen_idx ∈ {0, 1, 2}` (eligió una de las 3): **2 pares** (elegida vs cada una de las 2 descartadas).
+   - Si `chosen_idx == -1` y `user_wrote` está lleno (4ta opción, planeada): **3 pares** (`user_wrote` vs cada una de las 3 generadas). Adicionalmente, `(contexto, user_wrote)` se suma al dataset SFT.
+
+   Formato del par:
    ```json
-   {"prompt": "<chat template formateado>", "chosen": "<respuesta elegida>", "rejected": "<respuesta descartada>"}
+   {"prompt": "<chat template formateado>", "chosen": "<respuesta preferida>", "rejected": "<respuesta descartada>"}
    ```
 2. **Aplicar DPO sobre el modelo SFT actual.** MLX-LM no tiene DPO nativo al momento de este doc; se evalúan dos caminos:
    - **`trl` (HuggingFace) con `DPOTrainer`**: requiere bajar al modelo no cuantizado en CPU/MPS; más lento en M1 pero la implementación es estándar.
