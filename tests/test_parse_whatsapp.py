@@ -193,6 +193,41 @@ def test_is_group_detection_and_participants(tmp_path):
     assert sorted(pairs[0]["participants"]) == ["Amiga1", "Amiga2"]
 
 
+def test_user_alias_you_normalized(tmp_path):
+    """'You' (alias en inglés del usuario) se normaliza al author_name canónico."""
+    content = (
+        "1/3/24, 10:30 - Amiga: Hola, te escribo para preguntarte algo importante.\n"
+        "1/3/24, 10:31 - You: Respuesta del usuario que quedó como 'You' en el export.\n"
+    )
+    p = _write(tmp_path, content)
+    from scripts.parse_whatsapp import parse_whatsapp
+    with _no_anon():
+        pairs = parse_whatsapp(str(p), "Nico")
+    # 'You' debe normalizarse a 'Nico', y como no es 'Amiga', cuenta como turno del usuario
+    assert len(pairs) == 1
+    # Y NO debe aparecer 'You' como participante
+    assert "You" not in pairs[0]["participants"]
+
+
+def test_group_self_reference_filtered(tmp_path):
+    """En grupos, mensajes cuyo autor es el propio nombre del chat son eventos
+    de sistema y no deben aparecer como participantes."""
+    content = (
+        "1/3/24, 10:30 - Mi Grupo: cambió el asunto del grupo a algo nuevo aquí dentro.\n"
+        "1/3/24, 10:31 - Amiga1: Hola chicas qué onda esta semana cómo va todo.\n"
+        "1/3/24, 10:32 - Amiga2: Acá complicada con trabajo pero nada raro la verdad.\n"
+        "1/3/24, 10:33 - Nico: Yo bien, planeando hacer algo el finde si pueden sumarse.\n"
+    )
+    p = _write(tmp_path, content, name="WhatsApp Chat - Mi Grupo.txt")
+    from scripts.parse_whatsapp import parse_whatsapp
+    with _no_anon():
+        pairs = parse_whatsapp(str(p), "Nico")
+    assert len(pairs) == 1
+    # 'Mi Grupo' es el chat_name y no debe aparecer como participante
+    assert "Mi Grupo" not in pairs[0]["participants"]
+    assert sorted(pairs[0]["participants"]) == ["Amiga1", "Amiga2"]
+
+
 def test_one_on_one_is_not_group(tmp_path):
     content = (
         "1/3/24, 10:30 - Amiga: Mensaje uno con texto suficiente para ser válido.\n"

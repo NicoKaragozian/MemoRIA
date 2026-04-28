@@ -175,6 +175,7 @@ main {
 }
 
 .field { display: flex; flex-direction: column; gap: 0.4rem; }
+.field[hidden] { display: none; }
 .field-full { grid-column: 1 / -1; position: relative; }
 
 .field-label {

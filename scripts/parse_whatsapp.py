@@ -48,6 +48,10 @@ _SYSTEM_PATTERNS = [
 _SYSTEM_RE = re.compile('|'.join(_SYSTEM_PATTERNS), re.IGNORECASE)
 _LRM_RLM = re.compile(r'[\u200E\u200F]')
 
+# Aliases del usuario que WhatsApp usa según el idioma del export.
+# Se filtran del listado de participantes — siempre apuntan al usuario.
+_USER_ALIASES = frozenset({"you", "tú", "tu", "yo"})
+
 _TS_FORMATS = (
     '%d/%m/%Y %H:%M:%S',
     '%d/%m/%Y %H:%M',
@@ -165,6 +169,11 @@ def parse_whatsapp(
     """
     chat_name = _extract_chat_name(filepath)
     author_norm = author_name.casefold().strip()
+    chat_name_norm = chat_name.casefold().strip()
+
+    def is_user(author: str) -> bool:
+        a = author.casefold().strip()
+        return a == author_norm or a in _USER_ALIASES
 
     raw_messages = _parse_raw_messages(filepath)
     # Anonimizar contenido (autores se preservan).
@@ -172,12 +181,27 @@ def parse_whatsapp(
         msg['text'] = anonymize(msg['text'])
     raw_messages = [m for m in raw_messages if m['text'].strip()]
 
+    # Normalizar aliases del usuario al author_name canónico (ej. "You" → "Clara Kearney").
+    for msg in raw_messages:
+        if is_user(msg['author']):
+            msg['author'] = author_name
+
     if not raw_messages:
         logger.info('%s: sin mensajes parseables', filepath)
         return []
 
+    # Detectar si es grupo en base a autores únicos.
     authors = {m['author'] for m in raw_messages}
     is_group = len(authors) > 2
+
+    # En grupos, descartar mensajes cuyo autor coincide con el nombre del chat:
+    # son eventos de sistema ("X cambió el nombre del grupo") que el regex
+    # captura como si fueran texto normal. En 1:1 no aplica porque el
+    # chat_name justamente ES el nombre del otro interlocutor.
+    if is_group:
+        raw_messages = [m for m in raw_messages if m['author'].casefold().strip() != chat_name_norm]
+        authors = {m['author'] for m in raw_messages}
+
     participants = sorted(a for a in authors if a.casefold() != author_norm)
 
     conversations = _segment_by_gap(raw_messages, gap_hours)
