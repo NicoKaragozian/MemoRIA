@@ -460,11 +460,28 @@ El modelo lee el contexto y genera algo en formato chat (no copia el último aut
 
 | Opción | Esfuerzo | Hipótesis |
 |--------|----------|-----------|
+| **Reducir anonimización del dataset** (ver abajo, alta prioridad) | ~2 hs (~1.5 hs reentreno + ajustes parser) | Aumenta calidad y naturalidad del output |
 | Más iters (3000-5000) y/o más layers (32) | ~3 hs | Mejor convergencia |
 | Reentrenar sobre `gemma-3-4b` base (no `-it`) | ~4 hs | Menos prior "instruct" que combatir |
 | Sumar email_prof y académico | depende de datos | Más material, mejor estilo en general |
-| Filtrar más agresivamente targets con muchos `<PER>`/`<LOC>` | ~1 hs | Reducir noise pattern |
+| Filtrar más agresivamente targets con muchos `<PER>`/`<LOC>` | ~1 hs | Reducir noise pattern (parche; el fix real es bajar anonimización) |
 | Bajar `min_target_chars` o cambiar segmentación | ~1 hs | Más datos, ver tradeoff |
+
+### Reducir anonimización: prioridad alta
+
+**Problema observado al deployar el modelo de iteración 1:** el modelo aprendió a generar los tokens del anonimizador (`<PER>`, `<LOC>`, `<ORG>`, etc.) como output frecuente. Cuando responde, suele decir cosas como "te llamo a `<LOC>`" o "fui con `<PER>`" — los placeholders aparecen literales en la generación. Hay un parche en el backend que los corta como patrones stop, pero eso solo trunca la respuesta; el problema raíz está en el dataset.
+
+**Causa:** la decisión original del proyecto fue anonimizar agresivamente (números, emails, URLs, DNIs, CBUs, **y nombres propios detectados por spaCy** — PER/LOC/ORG). Esa decisión se justificaba por la posibilidad de publicar el modelo entrenado. **Para uso personal local (que es el caso real del proyecto)**, anonimizar nombres propios no protege nada (los datos reales viven igual en la Mac del usuario) pero sí destruye señal estilística importante: los nombres de amigos, lugares y organizaciones son justamente las palabras que más caracterizan la voz del usuario.
+
+**Fix propuesto:**
+
+1. Modificar `scripts/anonymize.py` para hacer la anonimización de nombres propios **opcional** (flag `anonymize_names`, default `False`).
+2. Mantener la anonimización de PII real (teléfonos, emails, URLs, DNIs, CBUs, IBANs) — esos sí son datos sensibles que vale la pena anonimizar incluso para uso personal.
+3. Regenerar `data/processed/whatsapp_pairs.jsonl` y `data/dataset/`.
+4. Reentrenar el modelo (~1.5 hs en M1).
+5. Quitar los tokens del anonimizador del regex `_OUTPUT_STOP` del backend (ya no son necesarios — el modelo no debería generarlos).
+
+**Resultado esperado:** las respuestas pasan de "te llamo a `<LOC>`" a "te llamo a Mechi" — naturales, completas, con la riqueza estilística que define la voz del usuario.
 
 ### Próximos pasos concretos para esta branch
 

@@ -74,7 +74,13 @@ _OUTPUT_STOP = re.compile(
     r'|\[Chat con\b'
     r'|\[Chat:'
     r'|\[CASUAL\]|\[EMAIL-PROF\]|\[ACADÉMICO\]'
-    r'|<start_of_turn>|<end_of_turn>|<bos>|<eos>',
+    r'|<start_of_turn>|<end_of_turn>|<bos>|<eos>'
+    # Tokens del anonimizador del dataset. El modelo aprendió a generarlos
+    # porque aparecen mucho en los targets de training. Cortamos ahí — la
+    # solución real es reducir la anonimización del dataset y reentrenar
+    # (ver "Caminos para mejorar" en docs/CHATBOT_DESIGN.md).
+    r'|<PER>|<LOC>|<ORG>|<EMAIL>|<URL>|<PHONE>|<HANDLE>|<COORDS>'
+    r'|<DNI>|<ID>|<CBU>|<IBAN>|<NUM>',
     re.IGNORECASE,
 )
 
@@ -91,33 +97,6 @@ _OUTPUT_NOISE = re.compile(
 # output, así si están construyendo un patrón stop podemos cortarlos antes
 # de que el cliente los vea. N debe ser >= longitud del patrón más largo.
 _HOLD_CHARS = 64
-
-# Reemplazos cosméticos de tokens del anonimizador. El modelo aprendió a
-# generarlos porque aparecen mucho en el dataset; los pasamos a placeholders
-# legibles en español. La causa raíz (anonimización agresiva del dataset) se
-# ataca reentrenando, no acá.
-_ANON_REPLACEMENTS = {
-    '<PER>':    '[alguien]',
-    '<LOC>':    '[un lugar]',
-    '<ORG>':    '[un lugar]',
-    '<EMAIL>':  '[email]',
-    '<URL>':    '[link]',
-    '<PHONE>':  '[número]',
-    '<HANDLE>': '[@usuario]',
-    '<COORDS>': '[ubicación]',
-    '<DNI>':    '[DNI]',
-    '<ID>':     '[ID]',
-    '<CBU>':    '[cuenta]',
-    '<IBAN>':   '[cuenta]',
-    '<NUM>':    '[número]',
-}
-
-
-def _replace_anon_tokens(text: str) -> str:
-    for token, repl in _ANON_REPLACEMENTS.items():
-        text = text.replace(token, repl)
-    return text
-
 
 def _make_dynamic_stop(chat_name: str, participants: list[str]) -> Optional[re.Pattern]:
     """
@@ -221,9 +200,8 @@ async def generate(req: GenerateRequest, request: Request):
         return m
 
     def emit_clean(slice_text: str) -> str:
-        """Aplica filtros de output (noise + reemplazo de tokens del anonimizador)."""
+        """Aplica filtros de output (noise / mensajes de sistema)."""
         clean = _OUTPUT_NOISE.sub('', slice_text)
-        clean = _replace_anon_tokens(clean)
         return f"data: {json.dumps({'token': clean})}\n\n" if clean else ""
 
     if req.stream:
@@ -311,8 +289,7 @@ async def generate(req: GenerateRequest, request: Request):
             m = find_stop(raw)
             if m:
                 raw = raw[:m.start()].rstrip()
-            cleaned = _OUTPUT_NOISE.sub('', raw)
-            cleaned = _replace_anon_tokens(cleaned).strip()
+            cleaned = _OUTPUT_NOISE.sub('', raw).strip()
             return {"text": cleaned}
     except httpx.TimeoutException:
         logger.exception("Ollama timeout (non-stream)")
