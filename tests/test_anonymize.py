@@ -106,8 +106,29 @@ def test_graceful_without_spacy():
         assert "4567" not in result
 
 
+def test_anonymize_names_default_false():
+    """Por default los nombres propios NO se anonimizan: el modelo se entrena
+    sobre datos personales locales y los nombres dan riqueza estilística."""
+    result = anon("Mañana voy a Barcelona con Mechi a tomar algo")
+    # No deberían aparecer tokens del NER porque el flag está OFF
+    assert "<PER>" not in result
+    assert "<LOC>" not in result
+    # Los nombres se preservan tal cual
+    assert "Barcelona" in result
+    assert "Mechi" in result
+
+
+def test_anonymize_names_true_replaces_per_loc():
+    """Con anonymize_names=True, spaCy reemplaza nombres propios."""
+    result = anon("Mañana voy a Barcelona con Pedro", anonymize_names=True)
+    # Esperamos que aparezca al menos uno de los tokens (<PER> o <LOC>)
+    assert ("<PER>" in result) or ("<LOC>" in result)
+
+
 def test_strict_raises_without_spacy():
-    """Con strict=True, debe lanzar RuntimeError si spaCy no carga."""
+    """Con anonymize_names=True + strict=True, debe lanzar RuntimeError si
+    spaCy no carga. (strict solo aplica cuando se pidió anonimizar nombres
+    propios — sin ese flag, spaCy no se usa.)"""
     from scripts import anonymize as mod
 
     def mock_nlp():
@@ -115,7 +136,7 @@ def test_strict_raises_without_spacy():
 
     with patch.object(mod, "_nlp", mock_nlp):
         with pytest.raises(RuntimeError, match="spaCy"):
-            mod.anonymize("Texto cualquiera", strict=True)
+            mod.anonymize("Texto cualquiera", strict=True, anonymize_names=True)
 
 
 # ── No over-anonymize ─────────────────────────────────────────────────────────

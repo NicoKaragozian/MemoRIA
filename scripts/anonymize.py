@@ -56,14 +56,38 @@ def _nlp():
         return None
 
 
-def anonymize(text: str, keep_author: bool = True, strict: bool = False) -> str:
+def anonymize(
+    text: str,
+    keep_author: bool = True,
+    strict: bool = False,
+    anonymize_names: bool = False,
+) -> str:
     """
     Reemplaza PII en el texto con tokens genéricos.
 
     Args:
-        text:        texto a anonimizar
-        keep_author: si True, preserva los nombres del autor (KEEP_NAMES)
-        strict:      si True, lanza RuntimeError cuando spaCy no está disponible
+        text:            texto a anonimizar
+        keep_author:     si True, preserva los nombres del autor (KEEP_NAMES)
+                         cuando se aplica la anonimización de nombres propios
+        strict:          si True, lanza RuntimeError cuando spaCy no está
+                         disponible y se pidió anonymize_names=True
+        anonymize_names: si True, anonimiza nombres propios (personas,
+                         lugares, organizaciones) detectados por spaCy.
+                         Default False — para uso personal local conviene
+                         preservar los nombres reales: dan riqueza estilística
+                         al modelo y los datos quedan local de todos modos.
+                         Activar solo si se planea publicar el modelo.
+
+    Anonimización de PII real (siempre activa, independiente de anonymize_names):
+        - Teléfonos (≥8 dígitos) → <PHONE>
+        - Emails → <EMAIL>
+        - URLs → <URL>
+        - Handles (@usuario) → <HANDLE>
+        - Coordenadas geográficas → <COORDS>
+        - DNIs (7-8 dígitos) → <ID>
+        - CBUs (22 dígitos) → <CBU>
+        - IBANs → <IBAN>
+        - Números largos residuales (≥9 dígitos) → <NUM>
     """
     text = URL_RE.sub("<URL>", text)
     text = EMAIL_RE.sub("<EMAIL>", text)
@@ -78,12 +102,17 @@ def anonymize(text: str, keep_author: bool = True, strict: bool = False) -> str:
         _hours.append(m.group())
         return f"\x00H{len(_hours)-1}\x00"
     text = HOUR_RE.sub(_save_hour, text)
+    # DNI antes de PHONE: 8 dígitos contiguos también matchearían PHONE_RE
+    # como "phone corto", lo que dejaría DNI sin aplicar. Aplicar DNI primero.
+    text = DNI_RE.sub("<ID>", text)
     text = PHONE_RE.sub("<PHONE>", text)
     for i, h in enumerate(_hours):
         text = text.replace(f"\x00H{i}\x00", h)
 
-    text = DNI_RE.sub("<ID>", text)
     text = LONG_NUM_RE.sub("<NUM>", text)
+
+    if not anonymize_names:
+        return text
 
     nlp = _nlp()
     if nlp is None:
